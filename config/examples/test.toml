@@ -1,0 +1,12 @@
+[app]
+environment = "test"
+log_level = "DEBUG"
+
+[data]
+provider = "fixture"
+cache_enabled = false
+
+[backtest]
+initial_cash = 100000
+commission_per_contract = 0.0
+
