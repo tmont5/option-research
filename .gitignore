@@ -17,4 +17,4 @@ dist/
 build/
 
 .ipynb_checkpoints/
-
+notebooks/generated_reports/
