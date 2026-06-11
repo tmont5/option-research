@@ -6,10 +6,12 @@ from options_quant.data.providers.thetadata import (
     ThetaDataProvider,
     ThetaDataPythonClient,
 )
+from options_quant.data.providers.thetadata_options import ThetaDataOptionEndpoints
 
 __all__ = [
     "MarketDataProvider",
     "ThetaDataClient",
+    "ThetaDataOptionEndpoints",
     "ThetaDataProvider",
     "ThetaDataPythonClient",
 ]
