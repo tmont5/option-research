@@ -12,6 +12,7 @@ from options_quant.strategies.selection import (
     OptionSelectionCandidate,
     OptionSelectionQuery,
 )
+from options_quant.strategies.short_put import ShortPutStrategy, ShortPutStrategyConfig
 
 __all__ = [
     "ContractSelectionEngine",
@@ -19,6 +20,8 @@ __all__ = [
     "OptionSelectionQuery",
     "OptionsStrategy",
     "PortfolioState",
+    "ShortPutStrategy",
+    "ShortPutStrategyConfig",
     "StrategyMarketData",
     "StrategySignal",
     "StrategySignalType",
