@@ -8,6 +8,7 @@ packages = [{ include = "options_quant", from = "src" }]
 
 [tool.poetry.dependencies]
 python = "^3.12"
+duckdb = "^1.1.3"
 pydantic = "^2.10.4"
 pydantic-settings = "^2.7.0"
 
@@ -57,4 +58,3 @@ packages = ["options_quant"]
 warn_unused_ignores = true
 warn_redundant_casts = true
 warn_unreachable = true
-
