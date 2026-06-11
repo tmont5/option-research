@@ -4,7 +4,11 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from options_quant.data.models import OptionContract, OptionType
-from options_quant.data.providers.thetadata import RawResponse, ThetaDataProvider
+from options_quant.data.providers.thetadata import (
+    RawResponse,
+    ThetaDataProvider,
+    ThetaDataPythonClient,
+)
 
 
 class MockThetaDataTransport:
@@ -15,6 +19,113 @@ class MockThetaDataTransport:
     def get(self, endpoint: str, params: dict[str, str]) -> RawResponse:
         self.calls.append((endpoint, params))
         return self.responses[endpoint]
+
+
+class MockPandasFrame:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+
+    def to_dict(self, orient: str) -> list[dict[str, object]]:
+        assert orient == "records"
+        return self.rows
+
+
+class MockPolarsFrame:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+
+    def to_dicts(self) -> list[dict[str, object]]:
+        return self.rows
+
+
+class MockThetaPythonLibraryClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def stock_history_quote(
+        self,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+    ) -> MockPandasFrame:
+        self.calls.append(
+            (
+                "stock_history_quote",
+                {"symbol": symbol, "start_date": start_date, "end_date": end_date},
+            )
+        )
+        return MockPandasFrame(
+            [
+                {
+                    "date": date(2026, 6, 10),
+                    "ms_of_day": 34_200_000,
+                    "bid": "205.1",
+                    "ask": "205.2",
+                    "price": "205.15",
+                    "volume": 1_000_000,
+                }
+            ]
+        )
+
+    def option_list_contracts(
+        self,
+        request_type: str,
+        date: date,
+        symbol: str,
+    ) -> MockPandasFrame:
+        self.calls.append(
+            (
+                "option_list_contracts",
+                {"request_type": request_type, "date": date, "symbol": symbol},
+            )
+        )
+        return MockPandasFrame(
+            [
+                {
+                    "root": symbol,
+                    "expiration": make_contract().expiration,
+                    "strike": "200",
+                    "right": "P",
+                    "multiplier": 100,
+                }
+            ]
+        )
+
+    def option_history_greeks_all(
+        self,
+        symbol: str,
+        expiration: date,
+        strike: str,
+        right: str,
+        start_date: date,
+        end_date: date,
+    ) -> MockPolarsFrame:
+        self.calls.append(
+            (
+                "option_history_greeks_all",
+                {
+                    "symbol": symbol,
+                    "expiration": expiration,
+                    "strike": strike,
+                    "right": right,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+            )
+        )
+        return MockPolarsFrame(
+            [
+                {
+                    "timestamp": "2026-06-10T14:30:00+00:00",
+                    "delta": "-0.32",
+                    "gamma": "0.012",
+                    "theta": "-0.04",
+                    "vega": "0.18",
+                    "rho": "-0.03",
+                    "iv": "0.42",
+                }
+            ]
+        )
 
 
 def make_contract() -> OptionContract:
@@ -181,3 +292,101 @@ def test_retrieve_open_interest_maps_open_interest_rows() -> None:
     assert observations[0].contract == contract
     assert observations[0].timestamp == datetime(2026, 6, 10, tzinfo=UTC)
     assert observations[0].open_interest == 1_500
+
+
+def test_python_client_adapter_maps_stock_price_dataframe_to_provider_models() -> None:
+    library_client = MockThetaPythonLibraryClient()
+    provider = ThetaDataProvider(ThetaDataPythonClient(client=library_client))
+
+    prices = provider.retrieve_underlying_prices("AAPL", date(2026, 6, 10), date(2026, 6, 11))
+
+    assert library_client.calls == [
+        (
+            "stock_history_quote",
+            {
+                "symbol": "AAPL",
+                "start_date": date(2026, 6, 10),
+                "end_date": date(2026, 6, 11),
+            },
+        )
+    ]
+    assert prices[0].symbol == "AAPL"
+    assert prices[0].timestamp == datetime(2026, 6, 10, 9, 30, tzinfo=UTC)
+    assert prices[0].price == Decimal("205.15")
+
+
+def test_python_client_adapter_adds_default_endpoint_params() -> None:
+    library_client = MockThetaPythonLibraryClient()
+    provider = ThetaDataProvider(ThetaDataPythonClient(client=library_client))
+
+    chain = provider.retrieve_option_chain("AAPL", date(2026, 6, 10))
+
+    assert library_client.calls == [
+        (
+            "option_list_contracts",
+            {
+                "request_type": "quote",
+                "date": date(2026, 6, 10),
+                "symbol": "AAPL",
+            },
+        )
+    ]
+    assert chain.contracts == (make_contract(),)
+
+
+def test_python_client_adapter_converts_contract_params_and_polars_frames() -> None:
+    library_client = MockThetaPythonLibraryClient()
+    provider = ThetaDataProvider(ThetaDataPythonClient(client=library_client))
+
+    greeks = provider.retrieve_greeks(make_contract(), date(2026, 6, 10), date(2026, 6, 11))
+
+    assert library_client.calls == [
+        (
+            "option_history_greeks_all",
+            {
+                "symbol": "AAPL",
+                "expiration": date(2026, 7, 17),
+                "strike": "200",
+                "right": "P",
+                "start_date": date(2026, 6, 10),
+                "end_date": date(2026, 6, 11),
+            },
+        )
+    ]
+    assert greeks[0].contract == make_contract()
+    assert greeks[0].delta == Decimal("-0.32")
+    assert greeks[0].implied_volatility == Decimal("0.42")
+
+
+def test_python_client_adapter_allows_endpoint_method_overrides() -> None:
+    class CustomClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        def custom_stock_quote(
+            self,
+            symbol: str,
+            start_date: date,
+            end_date: date,
+        ) -> list[dict[str, object]]:
+            self.called = True
+            return [
+                {
+                    "date": start_date,
+                    "price": "100",
+                }
+            ]
+
+    custom_client = CustomClient()
+    provider = ThetaDataProvider(
+        ThetaDataPythonClient(
+            client=custom_client,
+            endpoint_methods={"/v2/hist/stock/quote": "custom_stock_quote"},
+        )
+    )
+
+    prices = provider.retrieve_underlying_prices("MSFT", date(2026, 6, 10), date(2026, 6, 10))
+
+    assert custom_client.called
+    assert prices[0].symbol == "MSFT"
+    assert prices[0].price == Decimal("100")

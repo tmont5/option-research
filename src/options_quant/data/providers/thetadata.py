@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Any, Protocol
+from importlib import import_module
+from typing import Any, Protocol, cast
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -62,6 +63,76 @@ class ThetaDataClient:
         if not isinstance(decoded, dict):
             raise ValueError("ThetaData response must be a JSON object")
         return decoded
+
+
+class ThetaDataPythonClient:
+    """Adapter for ThetaData's Python library.
+
+    The library returns Polars or Pandas dataframes. This adapter converts those
+    frames into the raw response shape consumed by ThetaDataProvider so the
+    normalization logic stays shared across REST and Python-library transports.
+    """
+
+    DEFAULT_ENDPOINT_METHODS = {
+        "/v2/hist/stock/quote": "stock_history_quote",
+        "/v2/list/contracts": "option_list_contracts",
+        "/v2/hist/option/implied_volatility": "option_history_greeks_implied_volatility",
+        "/v2/hist/option/greeks": "option_history_greeks_all",
+        "/v2/hist/option/open_interest": "option_history_open_interest",
+    }
+    DEFAULT_ENDPOINT_PARAMS = {
+        "/v2/list/contracts": {"request_type": "quote"},
+    }
+    DEFAULT_PARAMETER_ALIASES = {
+        "root": "symbol",
+        "exp": "expiration",
+    }
+
+    def __init__(
+        self,
+        client: Any | None = None,
+        *,
+        email: str | None = None,
+        password: str | None = None,
+        creds_file: str | None = None,
+        dataframe_type: str = "pandas",
+        endpoint_methods: dict[str, str] | None = None,
+        endpoint_params: dict[str, dict[str, str]] | None = None,
+        parameter_aliases: dict[str, str] | None = None,
+    ) -> None:
+        if client is None:
+            theta_module = cast(Any, import_module("thetadata"))
+            theta_client_class = theta_module.ThetaClient
+            client_kwargs: dict[str, str] = {"dataframe_type": dataframe_type}
+            if email is not None:
+                client_kwargs["email"] = email
+            if password is not None:
+                client_kwargs["password"] = password
+            if creds_file is not None:
+                client_kwargs["creds_file"] = creds_file
+            client = theta_client_class(**client_kwargs)
+        self._client = client
+        self._endpoint_methods = endpoint_methods or self.DEFAULT_ENDPOINT_METHODS
+        self._endpoint_params = endpoint_params or self.DEFAULT_ENDPOINT_PARAMS
+        self._parameter_aliases = parameter_aliases or self.DEFAULT_PARAMETER_ALIASES
+
+    def get(self, endpoint: str, params: dict[str, str]) -> RawResponse:
+        """Fetch data through the ThetaData Python library."""
+        method_name = self._endpoint_methods.get(endpoint)
+        if method_name is None:
+            raise ValueError(f"unsupported ThetaData Python endpoint: {endpoint}")
+        method = getattr(self._client, method_name)
+        endpoint_params = self._endpoint_params.get(endpoint, {})
+        frame = method(**self._python_kwargs(endpoint_params | params))
+        rows = _dataframe_rows(frame)
+        return {"response": rows}
+
+    def _python_kwargs(self, params: dict[str, str]) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        for key, value in params.items():
+            python_key = self._parameter_aliases.get(key, key)
+            kwargs[python_key] = _python_value(python_key, value)
+        return kwargs
 
 
 class ThetaDataProvider:
@@ -225,6 +296,18 @@ def _rows(response: RawResponse) -> list[RawRow]:
     return rows
 
 
+def _dataframe_rows(frame: Any) -> list[RawRow]:
+    if isinstance(frame, list):
+        return [dict(row) for row in frame]
+    if hasattr(frame, "to_dicts"):
+        rows = frame.to_dicts()
+        return [dict(row) for row in rows]
+    if hasattr(frame, "to_dict"):
+        rows = frame.to_dict(orient="records")
+        return [dict(row) for row in rows]
+    raise TypeError("ThetaData Python response must be a dataframe or row list")
+
+
 def _row_timestamp(row: RawRow, fallback_date: date) -> datetime:
     timestamp = row.get("timestamp", row.get("datetime"))
     if timestamp is not None:
@@ -330,3 +413,15 @@ def _thetadata_right(option_type: OptionType) -> str:
             return "C"
         case OptionType.PUT:
             return "P"
+
+
+def _python_value(key: str, value: str) -> Any:
+    if key in {"date", "start_date", "end_date", "expiration"}:
+        return _parse_thetadata_date(value)
+    return value
+
+
+def _parse_thetadata_date(value: str) -> date:
+    if len(value) == 8 and value.isdigit():
+        return date(int(value[:4]), int(value[4:6]), int(value[6:8]))
+    return date.fromisoformat(value)
