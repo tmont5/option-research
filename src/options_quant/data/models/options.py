@@ -87,6 +87,27 @@ class OptionContract(OptionsQuantModel):
     )
 
 
+class OptionChain(OptionsQuantModel):
+    """Point-in-time list of option contracts available for an underlying."""
+
+    underlying_symbol: str = Field(description="Ticker or provider symbol for the underlying.")
+    timestamp: AwareDatetime = Field(description="Timezone-aware chain observation timestamp.")
+    contracts: tuple[OptionContract, ...] = Field(
+        min_length=1,
+        description="Option contracts available in this chain snapshot.",
+    )
+
+    @model_validator(mode="after")
+    def validate_contract_symbols(self) -> Self:
+        """Ensure chain contracts all belong to the chain underlying."""
+        for contract in self.contracts:
+            if contract.underlying_symbol != self.underlying_symbol:
+                raise ValueError(
+                    "chain contract underlying_symbol must match chain underlying_symbol"
+                )
+        return self
+
+
 class OptionQuote(OptionsQuantModel):
     """Point-in-time quote and liquidity data for an option contract."""
 
@@ -124,6 +145,17 @@ class OptionGreek(OptionsQuantModel):
     rho: Decimal | None = Field(default=None, description="Option rho.")
     implied_volatility: Decimal | None = Field(
         default=None,
+        gt=Decimal("0"),
+        description="Annualized implied volatility as a decimal.",
+    )
+
+
+class OptionImpliedVolatility(OptionsQuantModel):
+    """Point-in-time implied volatility observation for an option contract."""
+
+    contract: OptionContract = Field(description="Option contract associated with the IV.")
+    timestamp: AwareDatetime = Field(description="Timezone-aware IV observation timestamp.")
+    implied_volatility: Decimal = Field(
         gt=Decimal("0"),
         description="Annualized implied volatility as a decimal.",
     )
