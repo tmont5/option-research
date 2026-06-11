@@ -161,6 +161,16 @@ class OptionImpliedVolatility(OptionsQuantModel):
     )
 
 
+class OptionOpenInterest(OptionsQuantModel):
+    """Point-in-time open interest observation for an option contract."""
+
+    contract: OptionContract = Field(description="Option contract associated with open interest.")
+    timestamp: AwareDatetime = Field(
+        description="Timezone-aware open interest observation timestamp."
+    )
+    open_interest: int = Field(ge=0, description="Open interest.")
+
+
 class OptionSnapshot(OptionsQuantModel):
     """Consistent snapshot joining underlying, option quote, and optional Greeks."""
 
