@@ -67,6 +67,63 @@ class MockThetaPythonLibraryClient:
             ]
         )
 
+    def stock_history_eod(
+        self,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+    ) -> MockPandasFrame:
+        self.calls.append(
+            (
+                "stock_history_eod",
+                {"symbol": symbol, "start_date": start_date, "end_date": end_date},
+            )
+        )
+        return MockPandasFrame(
+            [
+                {
+                    "date": date(2026, 6, 10),
+                    "close": "205.15",
+                    "volume": 1_000_000,
+                }
+            ]
+        )
+
+    def option_history_eod(
+        self,
+        symbol: str,
+        expiration: date,
+        strike: str,
+        right: str,
+        start_date: date,
+        end_date: date,
+    ) -> MockPandasFrame:
+        self.calls.append(
+            (
+                "option_history_eod",
+                {
+                    "symbol": symbol,
+                    "expiration": expiration,
+                    "strike": strike,
+                    "right": right,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+            )
+        )
+        return MockPandasFrame(
+            [
+                {
+                    "date": date(2026, 6, 10),
+                    "bid": "3.10",
+                    "ask": "3.30",
+                    "close": "3.20",
+                    "volume": 250,
+                    "open_interest": 1_500,
+                }
+            ]
+        )
+
     def option_list_contracts(
         self,
         request_type: str,
@@ -119,6 +176,41 @@ class MockThetaPythonLibraryClient:
                     "timestamp": "2026-06-10T14:30:00+00:00",
                     "delta": "-0.32",
                     "gamma": "0.012",
+                    "theta": "-0.04",
+                    "vega": "0.18",
+                    "rho": "-0.03",
+                    "iv": "0.42",
+                }
+            ]
+        )
+
+    def option_history_greeks_first_order(
+        self,
+        symbol: str,
+        expiration: date,
+        strike: str,
+        right: str,
+        start_date: date,
+        end_date: date,
+    ) -> MockPolarsFrame:
+        self.calls.append(
+            (
+                "option_history_greeks_first_order",
+                {
+                    "symbol": symbol,
+                    "expiration": expiration,
+                    "strike": strike,
+                    "right": right,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+            )
+        )
+        return MockPolarsFrame(
+            [
+                {
+                    "timestamp": "2026-06-10T14:30:00+00:00",
+                    "delta": "-0.32",
                     "theta": "-0.04",
                     "vega": "0.18",
                     "rho": "-0.03",
@@ -190,9 +282,7 @@ def test_retrieve_option_chain_maps_contract_rows() -> None:
 
     chain = provider.retrieve_option_chain("AAPL", date(2026, 6, 10))
 
-    assert transport.calls == [
-        ("/v2/list/contracts", {"root": "AAPL", "date": "20260610"})
-    ]
+    assert transport.calls == [("/v2/list/contracts", {"root": "AAPL", "date": "20260610"})]
     assert chain.underlying_symbol == "AAPL"
     assert chain.timestamp == datetime(2026, 6, 10, tzinfo=UTC)
     assert len(chain.contracts) == 2
@@ -294,6 +384,105 @@ def test_retrieve_open_interest_maps_open_interest_rows() -> None:
     assert observations[0].open_interest == 1_500
 
 
+def test_retrieve_underlying_eod_prices_maps_eod_rows() -> None:
+    transport = MockThetaDataTransport(
+        {
+            "/v2/hist/stock/eod": {
+                "header": ["date", "close", "volume"],
+                "response": [[20260610, "205.15", 1_000_000]],
+            }
+        }
+    )
+    provider = ThetaDataProvider(transport)
+
+    prices = provider.retrieve_underlying_eod_prices(
+        "AAPL",
+        date(2026, 6, 10),
+        date(2026, 6, 10),
+    )
+
+    assert transport.calls == [
+        (
+            "/v2/hist/stock/eod",
+            {"root": "AAPL", "start_date": "20260610", "end_date": "20260610"},
+        )
+    ]
+    assert prices[0].symbol == "AAPL"
+    assert prices[0].timestamp == datetime(2026, 6, 10, tzinfo=UTC)
+    assert prices[0].price == Decimal("205.15")
+    assert prices[0].volume == 1_000_000
+
+
+def test_retrieve_option_eod_quotes_maps_eod_rows() -> None:
+    contract = make_contract()
+    transport = MockThetaDataTransport(
+        {
+            "/v2/hist/option/eod": {
+                "response": [
+                    {
+                        "date": "2026-06-10",
+                        "bid": "3.10",
+                        "ask": "3.30",
+                        "close": "3.20",
+                        "volume": 250,
+                        "oi": 1_500,
+                    }
+                ]
+            }
+        }
+    )
+    provider = ThetaDataProvider(transport)
+
+    quotes = provider.retrieve_option_eod_quotes(
+        contract,
+        date(2026, 6, 10),
+        date(2026, 6, 10),
+    )
+
+    assert transport.calls[0][0] == "/v2/hist/option/eod"
+    assert quotes[0].contract == contract
+    assert quotes[0].timestamp == datetime(2026, 6, 10, tzinfo=UTC)
+    assert quotes[0].bid == Decimal("3.10")
+    assert quotes[0].ask == Decimal("3.30")
+    assert quotes[0].last == Decimal("3.20")
+    assert quotes[0].mark == Decimal("3.20")
+    assert quotes[0].open_interest == 1_500
+
+
+def test_retrieve_first_order_greeks_omits_gamma() -> None:
+    contract = make_contract()
+    transport = MockThetaDataTransport(
+        {
+            "/v2/hist/option/greeks_first_order": {
+                "response": [
+                    {
+                        "timestamp": "2026-06-10T14:30:00+00:00",
+                        "delta": "-0.32",
+                        "theta": "-0.04",
+                        "vega": "0.18",
+                        "rho": "-0.03",
+                        "iv": "0.42",
+                    }
+                ]
+            }
+        }
+    )
+    provider = ThetaDataProvider(transport)
+
+    greeks = provider.retrieve_first_order_greeks(
+        contract,
+        date(2026, 6, 10),
+        date(2026, 6, 10),
+    )
+
+    assert transport.calls[0][0] == "/v2/hist/option/greeks_first_order"
+    assert greeks[0].delta == Decimal("-0.32")
+    assert greeks[0].gamma is None
+    assert greeks[0].theta == Decimal("-0.04")
+    assert greeks[0].vega == Decimal("0.18")
+    assert greeks[0].rho == Decimal("-0.03")
+
+
 def test_python_client_adapter_maps_stock_price_dataframe_to_provider_models() -> None:
     library_client = MockThetaPythonLibraryClient()
     provider = ThetaDataProvider(ThetaDataPythonClient(client=library_client))
@@ -313,6 +502,55 @@ def test_python_client_adapter_maps_stock_price_dataframe_to_provider_models() -
     assert prices[0].symbol == "AAPL"
     assert prices[0].timestamp == datetime(2026, 6, 10, 9, 30, tzinfo=UTC)
     assert prices[0].price == Decimal("205.15")
+
+
+def test_python_client_adapter_maps_eod_methods() -> None:
+    library_client = MockThetaPythonLibraryClient()
+    provider = ThetaDataProvider(ThetaDataPythonClient(client=library_client))
+
+    prices = provider.retrieve_underlying_eod_prices("AAPL", date(2026, 6, 10), date(2026, 6, 11))
+    quotes = provider.retrieve_option_eod_quotes(
+        make_contract(), date(2026, 6, 10), date(2026, 6, 11)
+    )
+    greeks = provider.retrieve_first_order_greeks(
+        make_contract(), date(2026, 6, 10), date(2026, 6, 11)
+    )
+
+    assert library_client.calls == [
+        (
+            "stock_history_eod",
+            {
+                "symbol": "AAPL",
+                "start_date": date(2026, 6, 10),
+                "end_date": date(2026, 6, 11),
+            },
+        ),
+        (
+            "option_history_eod",
+            {
+                "symbol": "AAPL",
+                "expiration": date(2026, 7, 17),
+                "strike": "200",
+                "right": "P",
+                "start_date": date(2026, 6, 10),
+                "end_date": date(2026, 6, 11),
+            },
+        ),
+        (
+            "option_history_greeks_first_order",
+            {
+                "symbol": "AAPL",
+                "expiration": date(2026, 7, 17),
+                "strike": "200",
+                "right": "P",
+                "start_date": date(2026, 6, 10),
+                "end_date": date(2026, 6, 11),
+            },
+        ),
+    ]
+    assert prices[0].price == Decimal("205.15")
+    assert quotes[0].mark == Decimal("3.20")
+    assert greeks[0].gamma is None
 
 
 def test_python_client_adapter_adds_default_endpoint_params() -> None:
