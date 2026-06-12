@@ -230,7 +230,9 @@ class ThetaDataProvider:
             OptionImpliedVolatility(
                 contract=contract,
                 timestamp=_row_timestamp(row, start_date),
-                implied_volatility=_required_decimal(row, "implied_volatility", "iv"),
+                implied_volatility=_required_decimal(
+                    row, "implied_volatility", "implied_vol", "iv"
+                ),
             )
             for row in _rows(response)
         ]
@@ -294,7 +296,9 @@ class ThetaDataProvider:
                 theta=_optional_decimal(row, "theta"),
                 vega=_optional_decimal(row, "vega"),
                 rho=_optional_decimal(row, "rho"),
-                implied_volatility=_optional_decimal(row, "implied_volatility", "iv"),
+                implied_volatility=_optional_decimal(
+                    row, "implied_volatility", "implied_vol", "iv"
+                ),
             )
             for row in _rows(response)
         ]
@@ -319,7 +323,9 @@ class ThetaDataProvider:
                 theta=_optional_decimal(row, "theta"),
                 vega=_optional_decimal(row, "vega"),
                 rho=_optional_decimal(row, "rho"),
-                implied_volatility=_optional_decimal(row, "implied_volatility", "iv"),
+                implied_volatility=_optional_decimal(
+                    row, "implied_volatility", "implied_vol", "iv"
+                ),
             )
             for row in _rows(response)
         ]
