@@ -66,8 +66,11 @@ Before relying on a full historical ingestion run, perform one live ThetaData ch
 
 1. `option_history_eod(start_date, end_date, symbol="ANET", expiration=2026-07-17, strike="150", right="P")`
 2. `option_history_greeks_first_order(symbol="ANET", expiration=2026-07-17, strike="150", right="P", start_date=..., end_date=...)`
-3. Confirm returned rows carry the expected expiration, strike, and right, and that bid/ask/IV are in the same neighborhood as the independent source for the same date.
+3. `option_history_greeks_implied_volatility(symbol="ANET", expiration=2026-07-17, strike="150", right="P", start_date=..., end_date=...)`
+4. Confirm returned rows carry the expected expiration, strike, and right, and that bid/ask/IV are in the same neighborhood as the independent source for the same date.
+
+The app-facing provider also maps `/v2/hist/option/implied_volatility` through `retrieve_implied_volatility()`, and `retrieve_first_order_greeks()` accepts `implied_volatility` or `iv` when ThetaData includes it in first-order Greek rows. Use the dedicated implied-volatility endpoint as the canonical IV check.
 
 ## Conclusion
 
-The contract identity is verified across Schwab and Yahoo/yfinance. The main unresolved item is a live ThetaData credentialed call to confirm the same contract identity and first-order Greeks returned by ThetaData.
+The contract identity is verified across Schwab and Yahoo/yfinance. The main unresolved item is a live ThetaData credentialed call to confirm the same contract identity, implied volatility, and first-order Greeks returned by ThetaData.
