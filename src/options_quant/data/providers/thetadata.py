@@ -21,6 +21,7 @@ from options_quant.data.models import (
     OptionGreek,
     OptionImpliedVolatility,
     OptionOpenInterest,
+    OptionQuote,
     OptionStyle,
     OptionType,
     UnderlyingPrice,
@@ -74,10 +75,13 @@ class ThetaDataPythonClient:
     """
 
     DEFAULT_ENDPOINT_METHODS = {
+        "/v2/hist/stock/eod": "stock_history_eod",
         "/v2/hist/stock/quote": "stock_history_quote",
+        "/v2/hist/option/eod": "option_history_eod",
         "/v2/list/contracts": "option_list_contracts",
         "/v2/hist/option/implied_volatility": "option_history_greeks_implied_volatility",
         "/v2/hist/option/greeks": "option_history_greeks_all",
+        "/v2/hist/option/greeks_first_order": "option_history_greeks_first_order",
         "/v2/hist/option/open_interest": "option_history_open_interest",
     }
     DEFAULT_ENDPOINT_PARAMS = {
@@ -168,6 +172,33 @@ class ThetaDataProvider:
             for row in _rows(response)
         ]
 
+    def retrieve_underlying_eod_prices(
+        self,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+    ) -> list[UnderlyingPrice]:
+        """Return end-of-day underlying prices for an inclusive date range."""
+        response = self._transport.get(
+            "/v2/hist/stock/eod",
+            {
+                "root": symbol,
+                "start_date": _thetadata_date(start_date),
+                "end_date": _thetadata_date(end_date),
+            },
+        )
+        return [
+            UnderlyingPrice(
+                symbol=symbol,
+                timestamp=_row_timestamp(row, start_date),
+                price=_required_decimal(row, "price", "close", "last", "mark"),
+                bid=_optional_decimal(row, "bid"),
+                ask=_optional_decimal(row, "ask"),
+                volume=_optional_int(row, "volume"),
+            )
+            for row in _rows(response)
+        ]
+
     def retrieve_option_chain(self, symbol: str, as_of_date: date) -> OptionChain:
         """Return an option chain snapshot for one underlying and date."""
         response = self._transport.get(
@@ -204,6 +235,45 @@ class ThetaDataProvider:
             for row in _rows(response)
         ]
 
+    def retrieve_option_eod_quotes(
+        self,
+        contract: OptionContract,
+        start_date: date,
+        end_date: date,
+    ) -> list[OptionQuote]:
+        """Return end-of-day option price observations for one contract."""
+        response = self._transport.get(
+            "/v2/hist/option/eod",
+            _contract_params(contract, start_date, end_date),
+        )
+        quotes: list[OptionQuote] = []
+        for row in _rows(response):
+            bid = _optional_decimal(row, "bid")
+            ask = _optional_decimal(row, "ask")
+            mark = _optional_decimal(row, "mark", "price", "close")
+            last = _optional_decimal(row, "last", "close", "price")
+            if bid is None:
+                bid = mark if mark is not None else last
+            if ask is None:
+                ask = mark if mark is not None else last
+            if bid is None or ask is None:
+                raise ValueError(
+                    "ThetaData option EOD row must include bid/ask or a mark/close price"
+                )
+            quotes.append(
+                OptionQuote(
+                    contract=contract,
+                    timestamp=_row_timestamp(row, start_date),
+                    bid=bid,
+                    ask=ask,
+                    last=last,
+                    mark=mark,
+                    volume=_optional_int(row, "volume"),
+                    open_interest=_optional_int(row, "open_interest", "oi"),
+                )
+            )
+        return quotes
+
     def retrieve_greeks(
         self,
         contract: OptionContract,
@@ -221,6 +291,31 @@ class ThetaDataProvider:
                 timestamp=_row_timestamp(row, start_date),
                 delta=_optional_decimal(row, "delta"),
                 gamma=_optional_decimal(row, "gamma"),
+                theta=_optional_decimal(row, "theta"),
+                vega=_optional_decimal(row, "vega"),
+                rho=_optional_decimal(row, "rho"),
+                implied_volatility=_optional_decimal(row, "implied_volatility", "iv"),
+            )
+            for row in _rows(response)
+        ]
+
+    def retrieve_first_order_greeks(
+        self,
+        contract: OptionContract,
+        start_date: date,
+        end_date: date,
+    ) -> list[OptionGreek]:
+        """Return first-order Greek observations for one option contract."""
+        response = self._transport.get(
+            "/v2/hist/option/greeks_first_order",
+            _contract_params(contract, start_date, end_date),
+        )
+        return [
+            OptionGreek(
+                contract=contract,
+                timestamp=_row_timestamp(row, start_date),
+                delta=_optional_decimal(row, "delta"),
+                gamma=None,
                 theta=_optional_decimal(row, "theta"),
                 vega=_optional_decimal(row, "vega"),
                 rho=_optional_decimal(row, "rho"),
