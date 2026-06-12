@@ -326,6 +326,31 @@ def test_retrieve_implied_volatility_maps_iv_rows() -> None:
     assert observations[0].implied_volatility == Decimal("0.42")
 
 
+def test_retrieve_implied_volatility_maps_live_python_column_name() -> None:
+    contract = make_contract()
+    transport = MockThetaDataTransport(
+        {
+            "/v2/hist/option/implied_volatility": {
+                "response": [
+                    {
+                        "timestamp": "2026-06-10T20:00:00+00:00",
+                        "implied_vol": "0.5548",
+                    }
+                ]
+            }
+        }
+    )
+    provider = ThetaDataProvider(transport)
+
+    observations = provider.retrieve_implied_volatility(
+        contract,
+        date(2026, 6, 10),
+        date(2026, 6, 10),
+    )
+
+    assert observations[0].implied_volatility == Decimal("0.5548")
+
+
 def test_retrieve_greeks_maps_greek_rows() -> None:
     contract = make_contract()
     transport = MockThetaDataTransport(
@@ -481,6 +506,38 @@ def test_retrieve_first_order_greeks_omits_gamma() -> None:
     assert greeks[0].theta == Decimal("-0.04")
     assert greeks[0].vega == Decimal("0.18")
     assert greeks[0].rho == Decimal("-0.03")
+    assert greeks[0].implied_volatility == Decimal("0.42")
+
+
+def test_retrieve_first_order_greeks_maps_live_python_iv_column_name() -> None:
+    contract = make_contract()
+    transport = MockThetaDataTransport(
+        {
+            "/v2/hist/option/greeks_first_order": {
+                "response": [
+                    {
+                        "timestamp": "2026-06-10T20:00:00+00:00",
+                        "delta": "-0.2749",
+                        "theta": "-0.1287",
+                        "vega": "16.8641",
+                        "rho": "-4.8021",
+                        "implied_vol": "0.5548",
+                    }
+                ]
+            }
+        }
+    )
+    provider = ThetaDataProvider(transport)
+
+    greeks = provider.retrieve_first_order_greeks(
+        contract,
+        date(2026, 6, 10),
+        date(2026, 6, 10),
+    )
+
+    assert greeks[0].delta == Decimal("-0.2749")
+    assert greeks[0].gamma is None
+    assert greeks[0].implied_volatility == Decimal("0.5548")
 
 
 def test_python_client_adapter_maps_stock_price_dataframe_to_provider_models() -> None:
