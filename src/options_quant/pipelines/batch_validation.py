@@ -10,9 +10,9 @@ from decimal import Decimal
 from importlib import import_module
 from math import sqrt
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from options_quant.data.models import OptionType
 from options_quant.data.providers import ThetaDataProvider, ThetaDataPythonClient
@@ -40,6 +40,7 @@ class BatchValidationConfig(BaseModel):
     symbol: str = Field(default="SPY", min_length=1)
     start_date: date = Field(default=date(2025, 1, 3))
     trade_count: int = Field(default=5, gt=0)
+    end_date: date | None = Field(default=None)
     spacing_days: int = Field(default=7, gt=0)
     target_dte: int = Field(default=45, ge=0)
     target_delta: Decimal = Field(default=Decimal("-0.10"), ge=Decimal("-1"), le=Decimal("1"))
@@ -54,6 +55,13 @@ class BatchValidationConfig(BaseModel):
     theta_mdds_port: str | None = Field(default=None, min_length=1)
     theta_mdds_type: str | None = Field(default=None, min_length=1)
     verbose: bool = Field(default=False)
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> Self:
+        """Validate optional date-range generation settings."""
+        if self.end_date is not None and self.end_date < self.start_date:
+            raise ValueError("end_date must be greater than or equal to start_date")
+        return self
 
 
 @dataclass(frozen=True)
@@ -96,10 +104,7 @@ def run_batch_validation_pipeline(
     trade_runner: SingleTradeRunner | None = None,
 ) -> BatchValidationResult:
     """Run a small set of weekly single-trade validations."""
-    entry_dates = tuple(
-        config.start_date + timedelta(days=config.spacing_days * index)
-        for index in range(config.trade_count)
-    )
+    entry_dates = _entry_dates(config)
     runner = trade_runner if trade_runner is not None else _live_trade_runner(config)
     trades: list[SingleTradePipelineResult] = []
     failures: list[BatchTradeFailure] = []
@@ -122,6 +127,20 @@ def run_batch_validation_pipeline(
     _write_report(config.report_path, result)
     _log(config, f"wrote report to {config.report_path}")
     return result
+
+
+def _entry_dates(config: BatchValidationConfig) -> tuple[date, ...]:
+    if config.end_date is None:
+        return tuple(
+            config.start_date + timedelta(days=config.spacing_days * index)
+            for index in range(config.trade_count)
+        )
+    dates: list[date] = []
+    current = config.start_date
+    while current <= config.end_date:
+        dates.append(current)
+        current += timedelta(days=config.spacing_days)
+    return tuple(dates)
 
 
 def _live_trade_runner(config: BatchValidationConfig) -> SingleTradeRunner:
@@ -236,7 +255,12 @@ def _write_report(path: Path, result: BatchValidationResult) -> None:
     payload = {
         "symbol": result.config.symbol,
         "start_date": result.config.start_date.isoformat(),
-        "trade_count": result.config.trade_count,
+        "end_date": result.config.end_date.isoformat()
+        if result.config.end_date is not None
+        else None,
+        "entry_generation": "date_range" if result.config.end_date is not None else "count",
+        "requested_trade_count": result.config.trade_count,
+        "generated_entry_dates": len(result.entry_dates),
         "spacing_days": result.config.spacing_days,
         "target_dte": result.config.target_dte,
         "target_delta": str(result.config.target_delta),
@@ -247,7 +271,7 @@ def _write_report(path: Path, result: BatchValidationResult) -> None:
         "win_rate": _decimal_text(metrics.win_rate),
         "per_trade_sharpe": _ratio_text(metrics.per_trade_sharpe),
         "sharpe_note": metrics.sharpe_note,
-        "max_drawdown": str(metrics.max_drawdown),
+        "max_drawdown": _ratio_text(metrics.max_drawdown),
         "final_equity": _money_text(metrics.final_equity),
         "trades": [_trade_payload(trade) for trade in result.trades],
         "failures": [
@@ -273,7 +297,7 @@ def _write_report(path: Path, result: BatchValidationResult) -> None:
             "- "
             f"{trade.config.entry_date}: {selected.contract.expiration} "
             f"{selected.contract.strike}{selected.contract.option_type.value[0].upper()} "
-            f"DTE={selected.dte} delta={selected.delta} "
+            f"DTE={selected.dte} delta={_ratio_text(selected.delta)} "
             f"entry={_money_text(trade.audit.entry_price)} "
             f"PnL={_money_text(trade.audit.realized_pnl)}"
         )
@@ -297,7 +321,7 @@ def _trade_payload(trade: SingleTradePipelineResult) -> dict[str, str | int | No
         "strike": str(selected.contract.strike),
         "option_type": selected.contract.option_type.value,
         "dte": selected.dte,
-        "delta": _decimal_text(selected.delta),
+        "delta": _ratio_text(selected.delta),
         "iv": _ratio_text(selected.implied_volatility),
         "entry_price": _money_text(trade.audit.entry_price),
         "exit_date": closed.exit_date.isoformat() if closed is not None else None,

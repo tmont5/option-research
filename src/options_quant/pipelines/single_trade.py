@@ -385,7 +385,7 @@ def _greek_from_row(
         theta=_optional_decimal(row, "theta"),
         vega=_optional_decimal(row, "vega"),
         rho=_optional_decimal(row, "rho"),
-        implied_volatility=_optional_decimal(
+        implied_volatility=_positive_optional_decimal(
             row,
             "implied_volatility",
             "implied_vol",
@@ -704,6 +704,13 @@ def _optional_decimal(row: RawRow, *keys: str) -> Decimal | None:
     if value is None:
         return None
     return Decimal(str(value))
+
+
+def _positive_optional_decimal(row: RawRow, *keys: str) -> Decimal | None:
+    value = _optional_decimal(row, *keys)
+    if value is None or value <= Decimal("0"):
+        return None
+    return value
 
 
 def _optional_option_type(row: RawRow) -> OptionType | None:

@@ -58,6 +58,33 @@ def test_batch_validation_reports_completed_trades_and_failures(tmp_path: Path) 
     assert "insufficient sample" in report
 
 
+def test_batch_validation_generates_entries_through_end_date(tmp_path: Path) -> None:
+    seen_dates: list[date] = []
+
+    def runner(config: SingleTradePipelineConfig) -> SingleTradePipelineResult:
+        seen_dates.append(config.entry_date)
+        return _single_trade_result(config, Decimal("10"))
+
+    result = run_batch_validation_pipeline(
+        BatchValidationConfig(
+            start_date=date(2025, 1, 3),
+            end_date=date(2025, 1, 24),
+            trade_count=99,
+            report_path=tmp_path / "range_report.md",
+        ),
+        trade_runner=runner,
+    )
+
+    assert result.entry_dates == (
+        date(2025, 1, 3),
+        date(2025, 1, 10),
+        date(2025, 1, 17),
+        date(2025, 1, 24),
+    )
+    assert tuple(seen_dates) == result.entry_dates
+    assert result.metrics.completed_trades == 4
+
+
 def _single_trade_result(
     config: SingleTradePipelineConfig,
     pnl: Decimal,
