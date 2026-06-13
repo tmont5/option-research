@@ -18,3 +18,5 @@ build/
 
 .ipynb_checkpoints/
 notebooks/generated_reports/
+runs/
+*.duckdb
