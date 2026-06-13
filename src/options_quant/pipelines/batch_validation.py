@@ -49,6 +49,8 @@ class BatchValidationConfig(BaseModel):
     initial_cash: Decimal = Field(default=Decimal("100000"), gt=Decimal("0"))
     commission_per_contract: Decimal = Field(default=Decimal("0.65"), ge=Decimal("0"))
     slippage_per_contract: Decimal = Field(default=Decimal("0.00"), ge=Decimal("0"))
+    take_profit_pct: Decimal | None = Field(default=None, gt=Decimal("0"), le=Decimal("1"))
+    stop_loss_pct: Decimal | None = Field(default=None, gt=Decimal("0"))
     expiration_search_window_days: int = Field(default=14, ge=0)
     report_path: Path = Field(default=Path("runs/batch_validation/report.md"))
     theta_mdds_host: str | None = Field(default=None, min_length=1)
@@ -180,6 +182,8 @@ def _single_trade_config(
         initial_cash=config.initial_cash,
         commission_per_contract=config.commission_per_contract,
         slippage_per_contract=config.slippage_per_contract,
+        take_profit_pct=config.take_profit_pct,
+        stop_loss_pct=config.stop_loss_pct,
         expiration_search_window_days=config.expiration_search_window_days,
         report_path=config.report_path.parent / f"trade_{index:02d}_{entry_date.isoformat()}.md",
         theta_mdds_host=config.theta_mdds_host,
@@ -264,6 +268,8 @@ def _write_report(path: Path, result: BatchValidationResult) -> None:
         "spacing_days": result.config.spacing_days,
         "target_dte": result.config.target_dte,
         "target_delta": str(result.config.target_delta),
+        "take_profit_pct": _decimal_text(result.config.take_profit_pct),
+        "stop_loss_pct": _decimal_text(result.config.stop_loss_pct),
         "completed_trades": metrics.completed_trades,
         "failed_trades": metrics.failed_trades,
         "total_realized_pnl": _money_text(metrics.total_realized_pnl),
@@ -293,12 +299,15 @@ def _write_report(path: Path, result: BatchValidationResult) -> None:
         lines.append("- No completed trades")
     for trade in result.trades:
         selected = trade.selected_candidate
+        exit_reason = trade.audit.exit_reason.value if trade.audit.exit_reason is not None else None
         lines.append(
             "- "
             f"{trade.config.entry_date}: {selected.contract.expiration} "
             f"{selected.contract.strike}{selected.contract.option_type.value[0].upper()} "
             f"DTE={selected.dte} delta={_ratio_text(selected.delta)} "
             f"entry={_money_text(trade.audit.entry_price)} "
+            f"exit={_money_text(trade.audit.exit_price)} "
+            f"reason={exit_reason} "
             f"PnL={_money_text(trade.audit.realized_pnl)}"
         )
     if result.failures:

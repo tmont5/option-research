@@ -28,6 +28,19 @@ def main() -> None:
     parser.add_argument("--quantity", type=int, default=1)
     parser.add_argument("--commission-per-contract", type=Decimal, default=Decimal("0.65"))
     parser.add_argument("--slippage-per-contract", type=Decimal, default=Decimal("0.00"))
+    parser.add_argument(
+        "--take-profit-pct",
+        type=Decimal,
+        help="Close early when option mark falls by this fraction of entry credit, e.g. 0.50.",
+    )
+    parser.add_argument(
+        "--stop-loss-pct",
+        type=Decimal,
+        help=(
+            "Close early when option mark rises by this fraction over entry credit; "
+            "1.00 is a 2x credit stop."
+        ),
+    )
     parser.add_argument("--theta-mdds-host")
     parser.add_argument("--theta-mdds-port")
     parser.add_argument("--theta-mdds-type")
@@ -52,6 +65,8 @@ def main() -> None:
             quantity=args.quantity,
             commission_per_contract=args.commission_per_contract,
             slippage_per_contract=args.slippage_per_contract,
+            take_profit_pct=args.take_profit_pct,
+            stop_loss_pct=args.stop_loss_pct,
             theta_mdds_host=args.theta_mdds_host,
             theta_mdds_port=args.theta_mdds_port,
             theta_mdds_type=args.theta_mdds_type,

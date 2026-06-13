@@ -59,16 +59,27 @@ class FakeEndpoints:
             }
         ]
         if start_date != end_date:
-            rows.append(
-                {
-                    "timestamp": datetime(2025, 2, 14, 21, tzinfo=UTC),
-                    "delta": Decimal("0"),
-                    "theta": Decimal("0"),
-                    "vega": Decimal("0"),
-                    "rho": Decimal("0"),
-                    "implied_vol": Decimal("0.01"),
-                    "underlying_price": Decimal("525"),
-                }
+            rows.extend(
+                [
+                    {
+                        "timestamp": datetime(2025, 1, 10, 21, tzinfo=UTC),
+                        "delta": Decimal("-0.20"),
+                        "theta": Decimal("-0.04"),
+                        "vega": Decimal("0.22"),
+                        "rho": Decimal("-0.07"),
+                        "implied_vol": Decimal("0.20"),
+                        "underlying_price": Decimal("550"),
+                    },
+                    {
+                        "timestamp": datetime(2025, 2, 14, 21, tzinfo=UTC),
+                        "delta": Decimal("0"),
+                        "theta": Decimal("0"),
+                        "vega": Decimal("0"),
+                        "rho": Decimal("0"),
+                        "implied_vol": Decimal("0.01"),
+                        "underlying_price": Decimal("525"),
+                    },
+                ]
             )
         return rows
 
@@ -97,7 +108,23 @@ class FakeProvider:
                 mark=Decimal("2.00"),
                 volume=100,
                 open_interest=1000,
-            )
+            ),
+            OptionQuote(
+                contract=contract,
+                timestamp=datetime(2025, 1, 10, 21, tzinfo=UTC),
+                bid=Decimal("3.90"),
+                ask=Decimal("4.10"),
+                last=Decimal("4.00"),
+                mark=Decimal("4.00"),
+            ),
+            OptionQuote(
+                contract=contract,
+                timestamp=datetime(2025, 2, 13, 21, tzinfo=UTC),
+                bid=Decimal("5.00"),
+                ask=Decimal("5.20"),
+                last=Decimal("5.10"),
+                mark=Decimal("5.10"),
+            ),
         ]
 
 
@@ -125,3 +152,23 @@ def test_single_trade_pipeline_selects_and_explains_pnl(tmp_path: Path) -> None:
     assert result.audit.realized_pnl == Decimal("-301.30")
     assert result.audit.final_equity == Decimal("99698.70")
     assert "PnL = entry gross credit" in (tmp_path / "report.md").read_text()
+
+
+def test_single_trade_pipeline_can_stop_loss_before_expiration(tmp_path: Path) -> None:
+    result = run_single_trade_pipeline(
+        SingleTradePipelineConfig(
+            entry_date=date(2025, 1, 3),
+            target_dte=45,
+            target_delta=Decimal("-0.10"),
+            stop_loss_pct=Decimal("1.00"),
+            report_path=tmp_path / "report.md",
+        ),
+        endpoints=FakeEndpoints(),
+        provider=FakeProvider(),
+    )
+
+    closed = result.backtest_result.closed_positions[0]
+    assert closed.exit_date == date(2025, 1, 10)
+    assert closed.exit_reason.value == "early_exit"
+    assert result.audit.exit_price == Decimal("4.00")
+    assert result.audit.realized_pnl == Decimal("-201.30")

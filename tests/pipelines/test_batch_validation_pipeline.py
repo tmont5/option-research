@@ -85,6 +85,31 @@ def test_batch_validation_generates_entries_through_end_date(tmp_path: Path) -> 
     assert result.metrics.completed_trades == 4
 
 
+def test_batch_validation_passes_risk_exit_settings(tmp_path: Path) -> None:
+    seen_configs: list[SingleTradePipelineConfig] = []
+
+    def runner(config: SingleTradePipelineConfig) -> SingleTradePipelineResult:
+        seen_configs.append(config)
+        return _single_trade_result(config, Decimal("10"))
+
+    run_batch_validation_pipeline(
+        BatchValidationConfig(
+            start_date=date(2025, 1, 3),
+            trade_count=1,
+            take_profit_pct=Decimal("0.50"),
+            stop_loss_pct=Decimal("1.00"),
+            report_path=tmp_path / "risk_report.md",
+        ),
+        trade_runner=runner,
+    )
+
+    assert seen_configs[0].take_profit_pct == Decimal("0.50")
+    assert seen_configs[0].stop_loss_pct == Decimal("1.00")
+    report = (tmp_path / "risk_report.md").read_text()
+    assert '"take_profit_pct": "0.50"' in report
+    assert '"stop_loss_pct": "1.00"' in report
+
+
 def _single_trade_result(
     config: SingleTradePipelineConfig,
     pnl: Decimal,
