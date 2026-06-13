@@ -512,6 +512,49 @@ def test_retrieve_option_eod_quotes_maps_eod_rows() -> None:
     assert quotes[0].open_interest == 1_500
 
 
+def test_retrieve_option_eod_quotes_filters_rows_to_requested_contract() -> None:
+    contract = make_contract()
+    transport = MockThetaDataTransport(
+        {
+            "/v2/hist/option/eod": {
+                "response": [
+                    {
+                        "symbol": "AAPL",
+                        "expiration": "2026-07-17",
+                        "strike": "200",
+                        "right": "PUT",
+                        "date": "2026-06-10",
+                        "bid": "3.10",
+                        "ask": "3.30",
+                        "close": "3.20",
+                    },
+                    {
+                        "symbol": "AAPL",
+                        "expiration": "2026-07-17",
+                        "strike": "195",
+                        "right": "PUT",
+                        "date": "2026-06-10",
+                        "bid": "1.10",
+                        "ask": "1.20",
+                        "close": "1.15",
+                    },
+                ]
+            }
+        }
+    )
+    provider = ThetaDataProvider(transport)
+
+    quotes = provider.retrieve_option_eod_quotes(
+        contract,
+        date(2026, 6, 10),
+        date(2026, 6, 10),
+    )
+
+    assert len(quotes) == 1
+    assert quotes[0].contract == contract
+    assert quotes[0].mark == Decimal("3.20")
+
+
 def test_retrieve_first_order_greeks_omits_gamma() -> None:
     contract = make_contract()
     transport = MockThetaDataTransport(
