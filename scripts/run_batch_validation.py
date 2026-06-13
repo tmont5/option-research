@@ -16,6 +16,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbol", default="SPY")
     parser.add_argument("--start-date", type=date.fromisoformat, default=date(2025, 1, 3))
+    parser.add_argument(
+        "--end-date",
+        type=date.fromisoformat,
+        help="Generate weekly entries through this inclusive date. Overrides trade-count.",
+    )
     parser.add_argument("--trade-count", type=int, default=5)
     parser.add_argument("--spacing-days", type=int, default=7)
     parser.add_argument("--target-dte", type=int, default=45)
@@ -38,6 +43,7 @@ def main() -> None:
         BatchValidationConfig(
             symbol=args.symbol,
             start_date=args.start_date,
+            end_date=args.end_date,
             trade_count=args.trade_count,
             spacing_days=args.spacing_days,
             target_dte=args.target_dte,

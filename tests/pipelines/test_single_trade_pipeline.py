@@ -54,7 +54,7 @@ class FakeEndpoints:
                 "theta": Decimal("-0.04"),
                 "vega": Decimal("0.22"),
                 "rho": Decimal("-0.07"),
-                "implied_vol": Decimal("0.18"),
+                "implied_vol": Decimal("0"),
                 "underlying_price": Decimal("590"),
             }
         ]
