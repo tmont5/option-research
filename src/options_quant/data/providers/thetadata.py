@@ -258,7 +258,7 @@ class ThetaDataProvider:
             _contract_params(contract, start_date, end_date),
         )
         quotes: list[OptionQuote] = []
-        for row in _rows(response):
+        for row in _contract_rows(response, contract):
             bid = _optional_decimal(row, "bid")
             ask = _optional_decimal(row, "ask")
             mark = _optional_decimal(row, "mark", "price", "close")
@@ -309,7 +309,7 @@ class ThetaDataProvider:
                     row, "implied_volatility", "implied_vol", "iv"
                 ),
             )
-            for row in _rows(response)
+            for row in _contract_rows(response, contract)
         ]
 
     def retrieve_first_order_greeks(
@@ -336,7 +336,7 @@ class ThetaDataProvider:
                     row, "implied_volatility", "implied_vol", "iv"
                 ),
             )
-            for row in _rows(response)
+            for row in _contract_rows(response, contract)
         ]
 
     def retrieve_open_interest(
@@ -356,7 +356,7 @@ class ThetaDataProvider:
                 timestamp=_row_timestamp(row, start_date),
                 open_interest=_required_int(row, "open_interest", "oi"),
             )
-            for row in _rows(response)
+            for row in _contract_rows(response, contract)
         ]
 
 
@@ -368,7 +368,7 @@ def _contract_params(
     return {
         "root": contract.underlying_symbol,
         "exp": _thetadata_date(contract.expiration),
-        "strike": str(contract.strike),
+        "strike": _strike_text(contract.strike),
         "right": _thetadata_right(contract.option_type),
         "start_date": _thetadata_date(start_date),
         "end_date": _thetadata_date(end_date),
@@ -406,6 +406,26 @@ def _rows(response: RawResponse) -> list[RawRow]:
     return rows
 
 
+def _contract_rows(response: RawResponse, contract: OptionContract) -> list[RawRow]:
+    return [row for row in _rows(response) if _row_matches_contract(row, contract)]
+
+
+def _row_matches_contract(row: RawRow, contract: OptionContract) -> bool:
+    symbol = _first_present(row, "underlying_symbol", "root", "symbol")
+    if symbol is not None and str(symbol) != contract.underlying_symbol:
+        return False
+    expiration = _optional_date(row, "expiration", "exp", "expiration_date")
+    if expiration is not None and expiration != contract.expiration:
+        return False
+    strike = _optional_decimal(row, "strike")
+    if strike is not None and strike != contract.strike:
+        return False
+    option_type = _optional_option_type(row)
+    if option_type is not None and option_type is not contract.option_type:
+        return False
+    return True
+
+
 def _dataframe_rows(frame: Any) -> list[RawRow]:
     if isinstance(frame, list):
         return [dict(row) for row in frame]
@@ -419,7 +439,7 @@ def _dataframe_rows(frame: Any) -> list[RawRow]:
 
 
 def _row_timestamp(row: RawRow, fallback_date: date) -> datetime:
-    timestamp = row.get("timestamp", row.get("datetime"))
+    timestamp = _first_present(row, "timestamp", "datetime", "created", "last_trade")
     if timestamp is not None:
         if isinstance(timestamp, datetime):
             return _aware(timestamp)
@@ -462,6 +482,13 @@ def _option_type(row: RawRow) -> OptionType:
     if normalized in {"p", "put"}:
         return OptionType.PUT
     raise ValueError(f"unsupported option type: {value}")
+
+
+def _optional_option_type(row: RawRow) -> OptionType | None:
+    value = _first_present(row, "option_type", "right", "cp")
+    if value is None:
+        return None
+    return _option_type(row)
 
 
 def _option_style(row: RawRow) -> OptionStyle:
@@ -523,6 +550,10 @@ def _thetadata_right(option_type: OptionType) -> str:
             return "C"
         case OptionType.PUT:
             return "P"
+
+
+def _strike_text(strike: Decimal) -> str:
+    return format(strike.normalize(), "f")
 
 
 def _python_value(key: str, value: str) -> Any:
