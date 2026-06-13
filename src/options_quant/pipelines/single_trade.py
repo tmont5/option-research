@@ -285,24 +285,55 @@ def _entry_greeks(
     endpoints: SingleTradeOptionEndpoints,
     contracts: list[OptionContract],
 ) -> tuple[list[OptionGreek], dict[date, UnderlyingPrice]]:
+    if not contracts:
+        return [], {}
+    expiration = contracts[0].expiration
+    rows = _raw_entry_greek_rows_for_expiration(config, endpoints, expiration)
+    contract_by_key = {
+        _contract_key(contract.expiration, contract.strike, contract.option_type): contract
+        for contract in contracts
+    }
     greeks: list[OptionGreek] = []
     underlying_by_date: dict[date, UnderlyingPrice] = {}
-    for index, contract in enumerate(contracts, start=1):
-        if index == 1 or index == len(contracts) or index % 25 == 0:
-            _log(
-                config,
-                f"[{index}/{len(contracts)}] fetching entry Greeks through {contract.strike}",
-            )
-        contract_greeks, contract_underlying = _greeks_for_contract(
-            config,
-            endpoints,
-            contract,
-            config.entry_date,
-            config.entry_date,
+    for row in rows:
+        strike = _optional_decimal(row, "strike")
+        if strike is None:
+            continue
+        row_expiration = (
+            _optional_row_date(row, "expiration", "exp", "expiration_date") or expiration
         )
-        greeks.extend(contract_greeks)
+        option_type = _optional_option_type(row) or config.option_type
+        contract = contract_by_key.get(_contract_key(row_expiration, strike, option_type))
+        if contract is None:
+            continue
+        contract_greeks, contract_underlying = _greek_from_row(config, contract, row)
+        greeks.append(contract_greeks)
         underlying_by_date.update(contract_underlying)
     return greeks, underlying_by_date
+
+
+def _raw_entry_greek_rows_for_expiration(
+    config: SingleTradePipelineConfig,
+    endpoints: SingleTradeOptionEndpoints,
+    expiration: date,
+) -> list[RawRow]:
+    _log(config, f"fetching entry Greeks for {config.symbol} {expiration}")
+    try:
+        return endpoints.history_greeks_first_order(
+            symbol=config.symbol,
+            expiration=expiration,
+            strike="*",
+            right=_thetadata_right(config.option_type),
+            interval="1m",
+            start_date=config.entry_date,
+            end_date=config.entry_date,
+            start_time=MARKET_CLOSE.isoformat(),
+            end_time=MARKET_CLOSE.isoformat(),
+        )
+    except Exception as error:
+        if _is_no_data_error(error):
+            return []
+        raise
 
 
 def _contract_greeks_range(
@@ -334,32 +365,42 @@ def _greeks_for_contract(
     greeks: list[OptionGreek] = []
     underlying_by_date: dict[date, UnderlyingPrice] = {}
     for row in rows:
-        timestamp = _row_timestamp(row, start_date)
-        greeks.append(
-            OptionGreek(
-                contract=contract,
-                timestamp=timestamp,
-                delta=_optional_decimal(row, "delta"),
-                gamma=None,
-                theta=_optional_decimal(row, "theta"),
-                vega=_optional_decimal(row, "vega"),
-                rho=_optional_decimal(row, "rho"),
-                implied_volatility=_optional_decimal(
-                    row,
-                    "implied_volatility",
-                    "implied_vol",
-                    "iv",
-                ),
-            )
-        )
-        underlying_price = _optional_decimal(row, "underlying_price")
-        if underlying_price is not None:
-            underlying_by_date[timestamp.date()] = UnderlyingPrice(
-                symbol=config.symbol,
-                timestamp=timestamp,
-                price=underlying_price,
-            )
+        greek, contract_underlying = _greek_from_row(config, contract, row)
+        greeks.append(greek)
+        underlying_by_date.update(contract_underlying)
     return greeks, underlying_by_date
+
+
+def _greek_from_row(
+    config: SingleTradePipelineConfig,
+    contract: OptionContract,
+    row: RawRow,
+) -> tuple[OptionGreek, dict[date, UnderlyingPrice]]:
+    timestamp = _row_timestamp(row, config.entry_date)
+    greek = OptionGreek(
+        contract=contract,
+        timestamp=timestamp,
+        delta=_optional_decimal(row, "delta"),
+        gamma=None,
+        theta=_optional_decimal(row, "theta"),
+        vega=_optional_decimal(row, "vega"),
+        rho=_optional_decimal(row, "rho"),
+        implied_volatility=_optional_decimal(
+            row,
+            "implied_volatility",
+            "implied_vol",
+            "iv",
+        ),
+    )
+    underlying: dict[date, UnderlyingPrice] = {}
+    underlying_price = _optional_decimal(row, "underlying_price")
+    if underlying_price is not None:
+        underlying[timestamp.date()] = UnderlyingPrice(
+            symbol=config.symbol,
+            timestamp=timestamp,
+            price=underlying_price,
+        )
+    return greek, underlying
 
 
 def _raw_greek_rows_for_contract(
@@ -622,6 +663,18 @@ def _row_date(row: RawRow, *keys: str) -> date:
     return date.fromisoformat(text)
 
 
+def _optional_row_date(row: RawRow, *keys: str) -> date | None:
+    value = _first_present(row, keys)
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    text = str(value)
+    if len(text) == 8 and text.isdigit():
+        return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
+    return date.fromisoformat(text)
+
+
 def _row_timestamp(row: RawRow, fallback_date: date) -> datetime:
     timestamp = _first_present(row, ("timestamp", "datetime"))
     if isinstance(timestamp, datetime):
@@ -653,6 +706,18 @@ def _optional_decimal(row: RawRow, *keys: str) -> Decimal | None:
     return Decimal(str(value))
 
 
+def _optional_option_type(row: RawRow) -> OptionType | None:
+    value = _first_present(row, ("option_type", "right", "cp"))
+    if value is None:
+        return None
+    normalized = str(value).lower()
+    if normalized in {"c", "call"}:
+        return OptionType.CALL
+    if normalized in {"p", "put"}:
+        return OptionType.PUT
+    raise ValueError(f"unsupported option type: {value}")
+
+
 def _first_present(row: RawRow, keys: Iterable[str]) -> Any | None:
     for key in keys:
         value = row.get(key)
@@ -669,6 +734,14 @@ def _thetadata_right(option_type: OptionType) -> str:
 
 def _strike_text(strike: Decimal) -> str:
     return format(strike.normalize(), "f")
+
+
+def _contract_key(
+    expiration: date,
+    strike: Decimal,
+    option_type: OptionType,
+) -> tuple[date, Decimal, OptionType]:
+    return expiration, strike, option_type
 
 
 def _decimal_text(value: Decimal | None) -> str | None:

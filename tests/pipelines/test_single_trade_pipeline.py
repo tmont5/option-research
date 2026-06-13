@@ -25,11 +25,28 @@ class FakeEndpoints:
         ]
 
     def history_greeks_first_order(self, **params: object) -> list[dict[str, object]]:
-        strike = Decimal(str(params["strike"]))
-        if strike == Decimal("520"):
-            raise NoDataFoundError("No data found")
+        strike_param = str(params["strike"])
         start_date = params["start_date"]
         end_date = params["end_date"]
+        if strike_param == "*":
+            return [
+                {
+                    "symbol": "SPY",
+                    "expiration": date(2025, 2, 14),
+                    "strike": Decimal("530"),
+                    "right": "PUT",
+                    "timestamp": datetime(2025, 1, 3, 21, tzinfo=UTC),
+                    "delta": Decimal("-0.11"),
+                    "theta": Decimal("-0.04"),
+                    "vega": Decimal("0.22"),
+                    "rho": Decimal("-0.07"),
+                    "implied_vol": Decimal("0.18"),
+                    "underlying_price": Decimal("590"),
+                }
+            ]
+        strike = Decimal(strike_param)
+        if strike == Decimal("520"):
+            raise NoDataFoundError("No data found")
         rows = [
             {
                 "timestamp": datetime(2025, 1, 3, 21, tzinfo=UTC),
