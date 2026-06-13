@@ -76,18 +76,15 @@ class FakeProvider:
 
 
 def test_one_week_pipeline_runs_through_storage_selection_and_backtest(tmp_path: Path) -> None:
-    result = run_one_week_pipeline(
-        OneWeekPipelineConfig(
-            symbol="ANET",
-            start_date=date(2026, 6, 8),
-            end_date=date(2026, 6, 9),
-            target_delta=Decimal("-0.30"),
-            database_path=tmp_path / "pipeline.duckdb",
-            report_path=tmp_path / "report.md",
-        ),
-        endpoints=FakeEndpoints(),
-        provider=FakeProvider(),
+    config = OneWeekPipelineConfig(
+        symbol="ANET",
+        start_date=date(2026, 6, 8),
+        end_date=date(2026, 6, 9),
+        target_delta=Decimal("-0.30"),
+        database_path=tmp_path / "pipeline.duckdb",
+        report_path=tmp_path / "report.md",
     )
+    result = run_one_week_pipeline(config, endpoints=FakeEndpoints(), provider=FakeProvider())
 
     assert result.chain_contracts == 2
     assert result.quote_rows == 4
@@ -98,3 +95,8 @@ def test_one_week_pipeline_runs_through_storage_selection_and_backtest(tmp_path:
     assert result.backtest_result.snapshots[-1].unrealized_pnl == Decimal("99.35")
     assert (tmp_path / "pipeline.duckdb").exists()
     assert "One-Week Pipeline Inspection" in (tmp_path / "report.md").read_text()
+
+    rerun_result = run_one_week_pipeline(config, endpoints=FakeEndpoints(), provider=FakeProvider())
+
+    assert rerun_result.underlying_rows == 2
+    assert rerun_result.selected_candidate.contract.strike == Decimal("150")

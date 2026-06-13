@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from types import SimpleNamespace
+from typing import Any
 
+import options_quant.data.providers.thetadata as thetadata_provider_module
 from options_quant.data.models import OptionContract, OptionType
 from options_quant.data.providers.thetadata import (
     RawResponse,
@@ -218,6 +221,41 @@ class MockThetaPythonLibraryClient:
                 }
             ]
         )
+
+
+class RecordingThetaClientConstructor:
+    def __init__(self) -> None:
+        self.kwargs: dict[str, str] | None = None
+
+    def __call__(self, **kwargs: str) -> MockThetaPythonLibraryClient:
+        self.kwargs = kwargs
+        return MockThetaPythonLibraryClient()
+
+
+def test_python_client_forwards_mdds_overrides(monkeypatch: Any) -> None:
+    constructor = RecordingThetaClientConstructor()
+
+    monkeypatch.setattr(
+        thetadata_provider_module,
+        "import_module",
+        lambda _: SimpleNamespace(ThetaClient=constructor),
+    )
+
+    ThetaDataPythonClient(
+        creds_file="/tmp/creds.txt",
+        dataframe_type="pandas",
+        mdds_host="127.0.0.1",
+        mdds_port="25510",
+        mdds_type="PROD",
+    )
+
+    assert constructor.kwargs == {
+        "dataframe_type": "pandas",
+        "creds_file": "/tmp/creds.txt",
+        "mdds_host": "127.0.0.1",
+        "mdds_port": "25510",
+        "mdds_type": "PROD",
+    }
 
 
 def make_contract() -> OptionContract:

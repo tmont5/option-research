@@ -27,6 +27,9 @@ class ThetaDataOptionEndpoints:
         password: str | None = None,
         creds_file: str | None = None,
         dataframe_type: str = "pandas",
+        mdds_host: str | None = None,
+        mdds_port: str | None = None,
+        mdds_type: str | None = None,
     ) -> None:
         if client is None:
             client = _build_theta_client(
@@ -34,6 +37,9 @@ class ThetaDataOptionEndpoints:
                 password=password,
                 creds_file=creds_file,
                 dataframe_type=dataframe_type,
+                mdds_host=mdds_host,
+                mdds_port=mdds_port,
+                mdds_type=mdds_type,
             )
         self._client = client
 
@@ -259,6 +265,9 @@ def _build_theta_client(
     password: str | None,
     creds_file: str | None,
     dataframe_type: str,
+    mdds_host: str | None,
+    mdds_port: str | None,
+    mdds_type: str | None,
 ) -> Any:
     theta_module = cast(Any, import_module("thetadata"))
     client_kwargs: dict[str, str] = {"dataframe_type": dataframe_type}
@@ -268,6 +277,12 @@ def _build_theta_client(
         client_kwargs["password"] = password
     if creds_file is not None:
         client_kwargs["creds_file"] = creds_file
+    if mdds_host is not None:
+        client_kwargs["mdds_host"] = mdds_host
+    if mdds_port is not None:
+        client_kwargs["mdds_port"] = mdds_port
+    if mdds_type is not None:
+        client_kwargs["mdds_type"] = mdds_type
     return theta_module.ThetaClient(**client_kwargs)
 
 

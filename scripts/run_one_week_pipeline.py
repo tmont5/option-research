@@ -24,6 +24,18 @@ def main() -> None:
     parser.add_argument("--min-strike", type=Decimal)
     parser.add_argument("--max-strike", type=Decimal)
     parser.add_argument(
+        "--theta-mdds-host",
+        help="ThetaData MDDS host override, e.g. 127.0.0.1 or localhost.",
+    )
+    parser.add_argument(
+        "--theta-mdds-port",
+        help="ThetaData MDDS port override. Must match the running Theta Terminal.",
+    )
+    parser.add_argument(
+        "--theta-mdds-type",
+        help="ThetaData MDDS environment override, e.g. PROD or STAGE.",
+    )
+    parser.add_argument(
         "--database-path",
         type=Path,
         default=Path("runs/one_week_pipeline/pipeline.duckdb"),
@@ -48,6 +60,9 @@ def main() -> None:
             max_contracts=args.max_contracts,
             min_strike=args.min_strike,
             max_strike=args.max_strike,
+            theta_mdds_host=args.theta_mdds_host,
+            theta_mdds_port=args.theta_mdds_port,
+            theta_mdds_type=args.theta_mdds_type,
             database_path=args.database_path,
             report_path=args.report_path,
             verbose=args.verbose,

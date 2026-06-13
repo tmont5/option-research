@@ -100,6 +100,9 @@ class ThetaDataPythonClient:
         password: str | None = None,
         creds_file: str | None = None,
         dataframe_type: str = "pandas",
+        mdds_host: str | None = None,
+        mdds_port: str | None = None,
+        mdds_type: str | None = None,
         endpoint_methods: dict[str, str] | None = None,
         endpoint_params: dict[str, dict[str, str]] | None = None,
         parameter_aliases: dict[str, str] | None = None,
@@ -114,6 +117,12 @@ class ThetaDataPythonClient:
                 client_kwargs["password"] = password
             if creds_file is not None:
                 client_kwargs["creds_file"] = creds_file
+            if mdds_host is not None:
+                client_kwargs["mdds_host"] = mdds_host
+            if mdds_port is not None:
+                client_kwargs["mdds_port"] = mdds_port
+            if mdds_type is not None:
+                client_kwargs["mdds_type"] = mdds_type
             client = theta_client_class(**client_kwargs)
         self._client = client
         self._endpoint_methods = endpoint_methods or self.DEFAULT_ENDPOINT_METHODS

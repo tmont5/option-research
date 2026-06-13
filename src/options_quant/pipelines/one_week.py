@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Protocol, Self, cast
 
@@ -62,6 +63,10 @@ class OneWeekPipelineConfig(BaseModel):
     max_contracts: int | None = Field(default=None, gt=0)
     min_strike: Decimal | None = Field(default=None, gt=Decimal("0"))
     max_strike: Decimal | None = Field(default=None, gt=Decimal("0"))
+    theta_mdds_host: str | None = Field(default=None, min_length=1)
+    theta_mdds_port: str | None = Field(default=None, min_length=1)
+    theta_mdds_type: str | None = Field(default=None, min_length=1)
+    reset_database: bool = Field(default=True)
     verbose: bool = Field(default=False)
 
     @model_validator(mode="after")
@@ -125,17 +130,44 @@ def run_one_week_pipeline(
     provider: OneWeekMarketDataProvider | None = None,
 ) -> OneWeekPipelineResult:
     """Run ThetaData through storage, contract selection, and the backtest engine."""
-    resolved_endpoints: OneWeekOptionEndpoints = (
-        endpoints
-        if endpoints is not None
-        else cast(OneWeekOptionEndpoints, ThetaDataOptionEndpoints())
-    )
-    resolved_provider: OneWeekMarketDataProvider = (
-        provider if provider is not None else ThetaDataProvider(ThetaDataPythonClient())
-    )
+    if endpoints is None and provider is None:
+        theta_client = _build_thetadata_client(config)
+        resolved_endpoints: OneWeekOptionEndpoints = cast(
+            OneWeekOptionEndpoints,
+            ThetaDataOptionEndpoints(client=theta_client),
+        )
+        resolved_provider: OneWeekMarketDataProvider = ThetaDataProvider(
+            ThetaDataPythonClient(client=theta_client)
+        )
+    else:
+        resolved_endpoints = (
+            endpoints
+            if endpoints is not None
+            else cast(
+                OneWeekOptionEndpoints,
+                ThetaDataOptionEndpoints(
+                    mdds_host=config.theta_mdds_host,
+                    mdds_port=config.theta_mdds_port,
+                    mdds_type=config.theta_mdds_type,
+                ),
+            )
+        )
+        resolved_provider = (
+            provider
+            if provider is not None
+            else ThetaDataProvider(
+                ThetaDataPythonClient(
+                    mdds_host=config.theta_mdds_host,
+                    mdds_port=config.theta_mdds_port,
+                    mdds_type=config.theta_mdds_type,
+                )
+            )
+        )
 
     config.database_path.parent.mkdir(parents=True, exist_ok=True)
     config.report_path.parent.mkdir(parents=True, exist_ok=True)
+    if config.reset_database and config.database_path.exists():
+        config.database_path.unlink()
 
     contracts = _discover_contracts(config, resolved_endpoints)
     _log(config, f"discovered {len(contracts)} candidate contracts")
@@ -204,6 +236,18 @@ def run_one_week_pipeline(
     _write_report(config.report_path, result)
     _log(config, f"wrote report to {config.report_path}")
     return result
+
+
+def _build_thetadata_client(config: OneWeekPipelineConfig) -> Any:
+    theta_module = cast(Any, import_module("thetadata"))
+    client_kwargs: dict[str, str] = {"dataframe_type": "pandas"}
+    if config.theta_mdds_host is not None:
+        client_kwargs["mdds_host"] = config.theta_mdds_host
+    if config.theta_mdds_port is not None:
+        client_kwargs["mdds_port"] = config.theta_mdds_port
+    if config.theta_mdds_type is not None:
+        client_kwargs["mdds_type"] = config.theta_mdds_type
+    return theta_module.ThetaClient(**client_kwargs)
 
 
 def _discover_contracts(
@@ -297,9 +341,8 @@ def _select_contract(
     chains = storage.option_chains.retrieve_by_date(config.start_date)
     if not chains:
         raise ValueError("no option chain was stored for the start date")
-    underlying = _single(
+    underlying = _latest_unique_underlying_price(
         storage.underlying_prices.retrieve_by_date(config.start_date),
-        "underlying price",
     )
     greeks = storage.option_greeks.retrieve_by_date(config.start_date)
     selector = ContractSelectionEngine(
@@ -332,9 +375,7 @@ def _run_backtest(
         config.end_date,
     )
     quotes_by_date = {
-        quote.timestamp.date(): quote
-        for quote in quotes
-        if quote.contract == selected_contract
+        quote.timestamp.date(): quote for quote in quotes if quote.contract == selected_contract
     }
     underlying_by_date = {price.timestamp.date(): price for price in underlying_prices}
     market_events: list[BacktestMarketEvent] = []
@@ -422,6 +463,25 @@ def _quote_mark(quote: OptionQuote) -> Decimal:
     if quote.mark is not None:
         return quote.mark
     return (quote.bid + quote.ask) / Decimal("2")
+
+
+def _latest_unique_underlying_price(values: list[UnderlyingPrice]) -> UnderlyingPrice:
+    if not values:
+        return _single(values, "underlying price")
+    latest_timestamp = max(value.timestamp for value in values)
+    latest_values = [value for value in values if value.timestamp == latest_timestamp]
+    deduped = {
+        (
+            value.symbol,
+            value.timestamp,
+            value.price,
+            value.bid,
+            value.ask,
+            value.volume,
+        ): value
+        for value in latest_values
+    }
+    return _single(list(deduped.values()), "underlying price")
 
 
 def _single(values: list[UnderlyingPrice], label: str) -> UnderlyingPrice:

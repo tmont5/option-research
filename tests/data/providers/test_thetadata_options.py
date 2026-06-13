@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import date, time
+from types import SimpleNamespace
+from typing import Any
 
+import options_quant.data.providers.thetadata_options as theta_options_module
 from options_quant.data.providers import ThetaDataOptionEndpoints
 
 
@@ -34,6 +37,41 @@ class RecordingThetaOptionClient:
             return self.response
 
         return call
+
+
+class RecordingThetaOptionClientConstructor:
+    def __init__(self) -> None:
+        self.kwargs: dict[str, str] | None = None
+
+    def __call__(self, **kwargs: str) -> RecordingThetaOptionClient:
+        self.kwargs = kwargs
+        return RecordingThetaOptionClient()
+
+
+def test_client_builder_forwards_mdds_overrides(monkeypatch: Any) -> None:
+    constructor = RecordingThetaOptionClientConstructor()
+
+    monkeypatch.setattr(
+        theta_options_module,
+        "import_module",
+        lambda _: SimpleNamespace(ThetaClient=constructor),
+    )
+
+    ThetaDataOptionEndpoints(
+        creds_file="/tmp/creds.txt",
+        dataframe_type="pandas",
+        mdds_host="localhost",
+        mdds_port="25510",
+        mdds_type="PROD",
+    )
+
+    assert constructor.kwargs == {
+        "dataframe_type": "pandas",
+        "creds_file": "/tmp/creds.txt",
+        "mdds_host": "localhost",
+        "mdds_port": "25510",
+        "mdds_type": "PROD",
+    }
 
 
 def test_list_endpoints_route_to_thetadata_methods() -> None:
