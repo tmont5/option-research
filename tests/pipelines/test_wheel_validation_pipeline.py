@@ -11,7 +11,7 @@ from options_quant.backtest import (
     ClosedBacktestPosition,
     ExitReason,
 )
-from options_quant.data.models import OptionContract, OptionQuote, OptionType
+from options_quant.data.models import OptionContract, OptionQuote, OptionType, UnderlyingPrice
 from options_quant.pipelines.single_trade import (
     SingleTradePipelineConfig,
     SingleTradePipelineResult,
@@ -58,6 +58,9 @@ def test_wheel_validation_assigns_put_then_sells_covered_call(tmp_path: Path) ->
     assert result.share_cost_basis is None
     assert result.realized_pnl == Decimal("798.70")
     assert result.cash_balance == Decimal("10798.70")
+    assert result.snapshots
+    assert min(snapshot.drawdown for snapshot in result.snapshots) < Decimal("0")
+    assert result.snapshots[-1].equity == Decimal("10798.70")
     assert "shares_called_away" in (tmp_path / "wheel.md").read_text()
 
 
@@ -94,6 +97,9 @@ def test_wheel_validation_skips_call_below_cost_basis(tmp_path: Path) -> None:
     assert result.skipped_entries == (
         (date(2025, 1, 10), "covered call strike 95 below cost basis 98.0065"),
     )
+    assert result.snapshots[-1].share_quantity == 100
+    assert result.snapshots[-1].stock_value == Decimal("9600")
+    assert result.snapshots[-1].open_options == 0
 
 
 def _trade(
@@ -140,7 +146,16 @@ def _trade(
         realized_pnl=pnl,
         exit_reason=ExitReason.EXPIRATION,
     )
-    snapshot = BacktestAccountSnapshot(
+    entry_snapshot = BacktestAccountSnapshot(
+        date=config.entry_date,
+        cash_balance=config.initial_cash + entry * Decimal("100") - Decimal("0.65"),
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=-Decimal("0.65"),
+        capital_utilization=Decimal("0"),
+        equity=config.initial_cash - Decimal("0.65"),
+        open_positions=(),
+    )
+    exit_snapshot = BacktestAccountSnapshot(
         date=expiration,
         cash_balance=config.initial_cash + pnl,
         realized_pnl=pnl,
@@ -172,6 +187,25 @@ def _trade(
         underlying_rows=1,
         selected_candidate=candidate,
         entry_quote=entry_quote,
-        backtest_result=BacktestResult(snapshots=(snapshot,), closed_positions=(closed,)),
+        underlying_prices=(
+            UnderlyingPrice(
+                symbol=config.symbol,
+                timestamp=datetime.combine(config.entry_date, datetime.min.time(), tzinfo=UTC),
+                price=strike,
+            ),
+            UnderlyingPrice(
+                symbol=config.symbol,
+                timestamp=datetime.combine(expiration, datetime.min.time(), tzinfo=UTC),
+                price=(
+                    strike - exit_price
+                    if config.option_type is OptionType.PUT
+                    else strike + Decimal("1")
+                ),
+            ),
+        ),
+        backtest_result=BacktestResult(
+            snapshots=(entry_snapshot, exit_snapshot),
+            closed_positions=(closed,),
+        ),
         audit=audit,
     )
