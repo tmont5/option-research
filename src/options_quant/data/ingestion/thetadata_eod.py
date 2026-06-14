@@ -208,16 +208,54 @@ def _candidate_contracts(
     effective_chain_date = chain_date or config.effective_chain_as_of_date
     min_expiration = effective_chain_date + timedelta(days=config.min_dte)
     max_expiration = effective_chain_date + timedelta(days=config.max_dte)
+    typed_contracts = [
+        contract for contract in chain.contracts if contract.option_type is config.option_type
+    ]
     contracts = [
         contract
-        for contract in chain.contracts
-        if contract.option_type is config.option_type
-        and min_expiration <= contract.expiration <= max_expiration
+        for contract in typed_contracts
+        if min_expiration <= contract.expiration <= max_expiration
     ]
+    if not contracts:
+        contracts = _nearest_expiration_contracts(
+            typed_contracts,
+            effective_chain_date,
+            config.min_dte,
+            config.max_dte,
+        )
     contracts.sort(key=lambda contract: (contract.expiration, contract.strike))
     if config.max_contracts is not None:
         return contracts[: config.max_contracts]
     return contracts
+
+
+def _nearest_expiration_contracts(
+    contracts: list[OptionContract],
+    chain_date: date,
+    min_dte: int,
+    max_dte: int,
+) -> list[OptionContract]:
+    if not contracts:
+        return []
+    target_dte = Decimal(min_dte + max_dte) / Decimal("2")
+    expirations = sorted({contract.expiration for contract in contracts})
+    expiration = min(
+        expirations,
+        key=lambda item: (
+            _expiration_window_distance((item - chain_date).days, min_dte, max_dte),
+            abs(Decimal((item - chain_date).days) - target_dte),
+            item,
+        ),
+    )
+    return [contract for contract in contracts if contract.expiration == expiration]
+
+
+def _expiration_window_distance(dte: int, min_dte: int, max_dte: int) -> int:
+    if dte < min_dte:
+        return min_dte - dte
+    if dte > max_dte:
+        return dte - max_dte
+    return 0
 
 
 def _closest_delta_contracts(
