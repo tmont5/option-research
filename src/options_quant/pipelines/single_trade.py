@@ -19,7 +19,9 @@ from options_quant.backtest import (
     BacktestMarketEvent,
     BacktestOrderEvent,
     BacktestOrderType,
+    BacktestPosition,
     BacktestResult,
+    EarlyExitRule,
     ExitReason,
 )
 from options_quant.data.models import (
@@ -56,6 +58,8 @@ class SingleTradePipelineConfig(BaseModel):
     initial_cash: Decimal = Field(default=Decimal("100000"), gt=Decimal("0"))
     commission_per_contract: Decimal = Field(default=Decimal("0.65"), ge=Decimal("0"))
     slippage_per_contract: Decimal = Field(default=Decimal("0.00"), ge=Decimal("0"))
+    take_profit_pct: Decimal | None = Field(default=None, gt=Decimal("0"), le=Decimal("1"))
+    stop_loss_pct: Decimal | None = Field(default=None, gt=Decimal("0"))
     expiration_search_window_days: int = Field(default=14, ge=0)
     report_path: Path = Field(default=Path("runs/single_trade/report.md"))
     theta_mdds_host: str | None = Field(default=None, min_length=1)
@@ -513,9 +517,50 @@ def _run_backtest(
             initial_cash=config.initial_cash,
             commission_per_contract=config.commission_per_contract,
             slippage_per_contract=config.slippage_per_contract,
-        )
+        ),
+        early_exit_rules=_early_exit_rules(config),
     )
     return engine.run(market_events, orders_by_date)
+
+
+def _early_exit_rules(config: SingleTradePipelineConfig) -> list[EarlyExitRule]:
+    if config.take_profit_pct is None and config.stop_loss_pct is None:
+        return []
+
+    def risk_exit(
+        position: BacktestPosition,
+        market_event: BacktestMarketEvent,
+    ) -> BacktestOrderEvent | None:
+        mark = market_event.option_marks.get(position.contract)
+        if mark is None:
+            return None
+        take_profit_price = (
+            position.entry_fill_price * (Decimal("1") - config.take_profit_pct)
+            if config.take_profit_pct is not None
+            else None
+        )
+        stop_loss_price = (
+            position.entry_fill_price * (Decimal("1") + config.stop_loss_pct)
+            if config.stop_loss_pct is not None
+            else None
+        )
+        if (
+            take_profit_price is not None
+            and mark <= take_profit_price
+            or stop_loss_price is not None
+            and mark >= stop_loss_price
+        ):
+            return BacktestOrderEvent(
+                contract=position.contract,
+                side=TradeSide.BUY,
+                quantity=position.absolute_quantity,
+                price=mark,
+                event_type=BacktestOrderType.CLOSE,
+                position_id=position.position_id,
+            )
+        return None
+
+    return [risk_exit]
 
 
 def _audit_trade(
@@ -579,6 +624,8 @@ def _write_report(path: Path, result: SingleTradePipelineResult) -> None:
         "entry_date": result.config.entry_date.isoformat(),
         "target_dte": result.config.target_dte,
         "target_delta": str(result.config.target_delta),
+        "take_profit_pct": _decimal_text(result.config.take_profit_pct),
+        "stop_loss_pct": _decimal_text(result.config.stop_loss_pct),
         "expiration_candidates": [
             expiration.isoformat() for expiration in result.expiration_candidates
         ],
