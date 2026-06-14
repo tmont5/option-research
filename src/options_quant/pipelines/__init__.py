@@ -28,6 +28,11 @@ from options_quant.pipelines.single_trade import (
     SingleTradePipelineResult,
     run_single_trade_pipeline,
 )
+from options_quant.pipelines.wheel_validation import (
+    WheelValidationConfig,
+    WheelValidationResult,
+    run_wheel_validation_pipeline,
+)
 
 __all__ = [
     "BatchTradeFailure",
@@ -43,9 +48,12 @@ __all__ = [
     "PortfolioValidationResult",
     "SingleTradePipelineConfig",
     "SingleTradePipelineResult",
+    "WheelValidationConfig",
+    "WheelValidationResult",
     "run_batch_validation_pipeline",
     "run_loser_autopsy_pipeline",
     "run_one_week_pipeline",
     "run_portfolio_validation_pipeline",
     "run_single_trade_pipeline",
+    "run_wheel_validation_pipeline",
 ]

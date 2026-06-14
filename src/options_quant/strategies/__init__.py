@@ -13,6 +13,11 @@ from options_quant.strategies.selection import (
     OptionSelectionQuery,
 )
 from options_quant.strategies.short_put import ShortPutStrategy, ShortPutStrategyConfig
+from options_quant.strategies.wheel import (
+    WheelAssignmentPolicy,
+    WheelCoveredCallStrikePolicy,
+    WheelStrategyConfig,
+)
 
 __all__ = [
     "ContractSelectionEngine",
@@ -25,4 +30,7 @@ __all__ = [
     "StrategyMarketData",
     "StrategySignal",
     "StrategySignalType",
+    "WheelAssignmentPolicy",
+    "WheelCoveredCallStrikePolicy",
+    "WheelStrategyConfig",
 ]
