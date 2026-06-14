@@ -73,6 +73,24 @@ class WheelEvent:
 
 
 @dataclass(frozen=True)
+class WheelDailySnapshot:
+    """One daily mark-to-market wheel portfolio snapshot."""
+
+    observed_date: date
+    cash_balance: Decimal
+    stock_value: Decimal
+    option_value: Decimal
+    equity: Decimal
+    realized_pnl: Decimal
+    unrealized_pnl: Decimal
+    drawdown: Decimal
+    share_quantity: int
+    share_cost_basis: Decimal | None
+    underlying_price: Decimal | None
+    open_options: int
+
+
+@dataclass(frozen=True)
 class WheelValidationResult:
     """Initial wheel lifecycle validation output."""
 
@@ -80,6 +98,7 @@ class WheelValidationResult:
     entry_dates: tuple[date, ...]
     option_trades: tuple[SingleTradePipelineResult, ...]
     events: tuple[WheelEvent, ...]
+    snapshots: tuple[WheelDailySnapshot, ...]
     failed_entries: tuple[tuple[date, str], ...]
     skipped_entries: tuple[tuple[date, str], ...]
     cash_balance: Decimal
@@ -97,6 +116,7 @@ def run_wheel_validation_pipeline(
     runner = trade_runner if trade_runner is not None else _live_trade_runner(config)
     entry_dates = _entry_dates(config)
     option_trades: list[SingleTradePipelineResult] = []
+    market_observations: list[SingleTradePipelineResult] = []
     events: list[WheelEvent] = []
     failures: list[tuple[date, str]] = []
     skips: list[tuple[date, str]] = []
@@ -128,6 +148,7 @@ def run_wheel_validation_pipeline(
                 failures.append((entry_date, str(error)))
                 continue
             option_trades.append(trade)
+            market_observations.append(trade)
             put_active_until = None
             cash_balance += trade.audit.entry_net_cash_flow
             closed = _closed(trade)
@@ -179,6 +200,7 @@ def run_wheel_validation_pipeline(
         except Exception as error:
             failures.append((entry_date, str(error)))
             continue
+        market_observations.append(trade)
         if trade.selected_candidate.contract.strike < share_cost_basis:
             skips.append(
                 (
@@ -240,6 +262,7 @@ def run_wheel_validation_pipeline(
         entry_dates=entry_dates,
         option_trades=tuple(option_trades),
         events=tuple(events),
+        snapshots=tuple(_daily_snapshots(config, option_trades, market_observations, events)),
         failed_entries=tuple(failures),
         skipped_entries=tuple(skips),
         cash_balance=cash_balance,
@@ -250,6 +273,156 @@ def run_wheel_validation_pipeline(
     config.report_path.parent.mkdir(parents=True, exist_ok=True)
     _write_report(config.report_path, result)
     return result
+
+
+def _daily_snapshots(
+    config: WheelValidationConfig,
+    option_trades: list[SingleTradePipelineResult],
+    market_observations: list[SingleTradePipelineResult],
+    events: list[WheelEvent],
+) -> list[WheelDailySnapshot]:
+    cash_events = _cash_events(option_trades)
+    dates = sorted(
+        {
+            snapshot.date
+            for trade in market_observations
+            for snapshot in trade.backtest_result.snapshots
+        }
+        | {
+            underlying.timestamp.date()
+            for trade in market_observations
+            for underlying in trade.underlying_prices
+        }
+        | {event.event_date for event in events}
+        | set(cash_events)
+    )
+    if not dates:
+        return []
+
+    underlying_by_date = _underlying_by_date(market_observations)
+    cash_balance = config.strategy.initial_cash
+    peak = config.strategy.initial_cash
+    snapshots: list[WheelDailySnapshot] = []
+    for observed_date in dates:
+        cash_balance += cash_events.get(observed_date, ZERO)
+        share_quantity, share_cost_basis = _share_state(events, observed_date)
+        underlying_price = underlying_by_date.get(observed_date)
+        stock_value = (
+            underlying_price * Decimal(share_quantity)
+            if underlying_price is not None and share_quantity > 0
+            else ZERO
+        )
+        option_value = _open_option_value(option_trades, observed_date)
+        equity = cash_balance + stock_value + option_value
+        stock_unrealized = (
+            (underlying_price - share_cost_basis) * Decimal(share_quantity)
+            if underlying_price is not None and share_cost_basis is not None and share_quantity > 0
+            else ZERO
+        )
+        option_unrealized = _open_option_unrealized(option_trades, observed_date)
+        unrealized_pnl = stock_unrealized + option_unrealized
+        realized_pnl = equity - config.strategy.initial_cash - unrealized_pnl
+        peak = max(peak, equity)
+        drawdown = equity / peak - Decimal("1") if peak != ZERO else ZERO
+        snapshots.append(
+            WheelDailySnapshot(
+                observed_date=observed_date,
+                cash_balance=cash_balance,
+                stock_value=stock_value,
+                option_value=option_value,
+                equity=equity,
+                realized_pnl=realized_pnl,
+                unrealized_pnl=unrealized_pnl,
+                drawdown=drawdown,
+                share_quantity=share_quantity,
+                share_cost_basis=share_cost_basis,
+                underlying_price=underlying_price,
+                open_options=_open_option_count(option_trades, observed_date),
+            )
+        )
+    return snapshots
+
+
+def _cash_events(option_trades: list[SingleTradePipelineResult]) -> dict[date, Decimal]:
+    events: dict[date, Decimal] = {}
+    for trade in option_trades:
+        _add_cash_event(events, trade.config.entry_date, trade.audit.entry_net_cash_flow)
+        closed = _closed(trade)
+        if closed is None or trade.audit.exit_price is None or trade.audit.exit_price <= ZERO:
+            continue
+        if trade.selected_candidate.contract.option_type is OptionType.PUT:
+            assignment_cash = trade.selected_candidate.contract.strike * CONTRACT_MULTIPLIER
+            _add_cash_event(events, closed.exit_date, -assignment_cash)
+        else:
+            stock_sale_cash = trade.selected_candidate.contract.strike * CONTRACT_MULTIPLIER
+            _add_cash_event(events, closed.exit_date, stock_sale_cash)
+    return events
+
+
+def _add_cash_event(events: dict[date, Decimal], event_date: date, amount: Decimal) -> None:
+    events[event_date] = events.get(event_date, ZERO) + amount
+
+
+def _underlying_by_date(option_trades: list[SingleTradePipelineResult]) -> dict[date, Decimal]:
+    prices: dict[date, Decimal] = {}
+    for trade in option_trades:
+        for underlying in trade.underlying_prices:
+            prices[underlying.timestamp.date()] = underlying.price
+    return prices
+
+
+def _share_state(events: list[WheelEvent], observed_date: date) -> tuple[int, Decimal | None]:
+    share_quantity = 0
+    share_cost_basis: Decimal | None = None
+    for event in sorted(events, key=lambda item: item.event_date):
+        if event.event_date > observed_date:
+            break
+        share_quantity = event.share_quantity
+        share_cost_basis = event.share_cost_basis
+    return share_quantity, share_cost_basis
+
+
+def _open_option_value(
+    option_trades: list[SingleTradePipelineResult],
+    observed_date: date,
+) -> Decimal:
+    return sum(
+        (
+            snapshot.equity - snapshot.cash_balance
+            for trade in option_trades
+            if _option_is_open(trade, observed_date)
+            for snapshot in trade.backtest_result.snapshots
+            if snapshot.date == observed_date
+        ),
+        ZERO,
+    )
+
+
+def _open_option_unrealized(
+    option_trades: list[SingleTradePipelineResult],
+    observed_date: date,
+) -> Decimal:
+    return sum(
+        (
+            snapshot.unrealized_pnl
+            for trade in option_trades
+            if _option_is_open(trade, observed_date)
+            for snapshot in trade.backtest_result.snapshots
+            if snapshot.date == observed_date
+        ),
+        ZERO,
+    )
+
+
+def _open_option_count(option_trades: list[SingleTradePipelineResult], observed_date: date) -> int:
+    return sum(1 for trade in option_trades if _option_is_open(trade, observed_date))
+
+
+def _option_is_open(trade: SingleTradePipelineResult, observed_date: date) -> bool:
+    closed = _closed(trade)
+    if closed is None:
+        return trade.config.entry_date <= observed_date
+    return bool(trade.config.entry_date <= observed_date < closed.exit_date)
 
 
 def _entry_dates(config: WheelValidationConfig) -> tuple[date, ...]:
@@ -353,6 +526,14 @@ def _write_report(path: Path, result: WheelValidationResult) -> None:
         "realized_pnl": _money(result.realized_pnl),
         "share_quantity": result.share_quantity,
         "share_cost_basis": _money(result.share_cost_basis),
+        "final_equity": _money(result.snapshots[-1].equity if result.snapshots else None),
+        "max_drawdown": _ratio(
+            min((snapshot.drawdown for snapshot in result.snapshots), default=ZERO)
+        ),
+        "min_equity": _money(
+            min((snapshot.equity for snapshot in result.snapshots), default=result.cash_balance)
+        ),
+        "snapshots": [_snapshot_payload(snapshot) for snapshot in result.snapshots],
     }
     lines = [
         "# Wheel Validation",
@@ -381,6 +562,19 @@ def _write_report(path: Path, result: WheelValidationResult) -> None:
         lines.extend(["", "## Failures", ""])
         for entry_date, error in result.failed_entries:
             lines.append(f"- {entry_date}: {error}")
+    lines.extend(["", "## Daily Mark To Market", ""])
+    if not result.snapshots:
+        lines.append("- No daily snapshots")
+    for snapshot in result.snapshots:
+        lines.append(
+            "- "
+            f"{snapshot.observed_date}: equity={_money(snapshot.equity)} "
+            f"cash={_money(snapshot.cash_balance)} "
+            f"stock={_money(snapshot.stock_value)} "
+            f"option={_money(snapshot.option_value)} "
+            f"drawdown={_ratio(snapshot.drawdown)} "
+            f"shares={snapshot.share_quantity} open_options={snapshot.open_options}"
+        )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -396,7 +590,30 @@ def _event_payload(event: WheelEvent) -> dict[str, str | int | None]:
     }
 
 
+def _snapshot_payload(snapshot: WheelDailySnapshot) -> dict[str, str | int | None]:
+    return {
+        "date": snapshot.observed_date.isoformat(),
+        "cash_balance": _money(snapshot.cash_balance),
+        "stock_value": _money(snapshot.stock_value),
+        "option_value": _money(snapshot.option_value),
+        "equity": _money(snapshot.equity),
+        "realized_pnl": _money(snapshot.realized_pnl),
+        "unrealized_pnl": _money(snapshot.unrealized_pnl),
+        "drawdown": _ratio(snapshot.drawdown),
+        "share_quantity": snapshot.share_quantity,
+        "share_cost_basis": _money(snapshot.share_cost_basis),
+        "underlying_price": _money(snapshot.underlying_price),
+        "open_options": snapshot.open_options,
+    }
+
+
 def _money(value: Decimal | None) -> str | None:
     if value is None:
         return None
     return str(value.quantize(Decimal("0.01")))
+
+
+def _ratio(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    return str(value.quantize(Decimal("0.0001")))

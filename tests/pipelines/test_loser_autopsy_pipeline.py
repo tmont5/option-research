@@ -155,6 +155,7 @@ def _single_trade_result(
         underlying_rows=1,
         selected_candidate=candidate,
         entry_quote=entry_quote,
+        underlying_prices=(),
         backtest_result=BacktestResult(snapshots=(snapshot,), closed_positions=(closed,)),
         audit=audit,
     )

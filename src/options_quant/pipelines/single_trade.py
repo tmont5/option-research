@@ -123,6 +123,7 @@ class SingleTradePipelineResult:
     underlying_rows: int
     selected_candidate: OptionSelectionCandidate
     entry_quote: OptionQuote
+    underlying_prices: tuple[UnderlyingPrice, ...]
     backtest_result: BacktestResult
     audit: TradeAudit
 
@@ -218,6 +219,9 @@ def run_single_trade_pipeline(
         underlying_rows=len(underlying_by_date),
         selected_candidate=selected,
         entry_quote=entry_quote,
+        underlying_prices=tuple(
+            sorted(underlying_by_date.values(), key=lambda underlying: underlying.timestamp)
+        ),
         backtest_result=backtest_result,
         audit=_audit_trade(config, selected.contract, entry_quote, backtest_result),
     )
