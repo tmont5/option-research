@@ -17,6 +17,12 @@ from options_quant.pipelines.one_week import (
     OneWeekPipelineResult,
     run_one_week_pipeline,
 )
+from options_quant.pipelines.portfolio_validation import (
+    PortfolioValidationConfig,
+    PortfolioValidationMetrics,
+    PortfolioValidationResult,
+    run_portfolio_validation_pipeline,
+)
 from options_quant.pipelines.single_trade import (
     SingleTradePipelineConfig,
     SingleTradePipelineResult,
@@ -32,10 +38,14 @@ __all__ = [
     "LoserAutopsyResult",
     "OneWeekPipelineConfig",
     "OneWeekPipelineResult",
+    "PortfolioValidationConfig",
+    "PortfolioValidationMetrics",
+    "PortfolioValidationResult",
     "SingleTradePipelineConfig",
     "SingleTradePipelineResult",
     "run_batch_validation_pipeline",
     "run_loser_autopsy_pipeline",
     "run_one_week_pipeline",
+    "run_portfolio_validation_pipeline",
     "run_single_trade_pipeline",
 ]
