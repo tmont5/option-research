@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -82,6 +83,17 @@ class ThetaDataEODIngestionConfig(BaseModel):
         gt=0,
         description="Optional cap for smoke tests or small local backfills.",
     )
+    target_delta: Decimal | None = Field(
+        default=None,
+        ge=Decimal("-1"),
+        le=Decimal("1"),
+        description="Optional target delta used to narrow the contract universe.",
+    )
+    contracts_around_target: int = Field(
+        default=5,
+        gt=0,
+        description="Number of closest-delta contracts to keep when target_delta is set.",
+    )
 
     @model_validator(mode="after")
     def validate_ranges(self) -> Self:
@@ -130,6 +142,8 @@ class ThetaDataEODIngestionPipeline:
             config.effective_chain_as_of_date,
         )
         contracts = _candidate_contracts(chain, config)
+        if config.target_delta is not None:
+            contracts = _closest_delta_contracts(contracts, config, self._provider)
         option_chains_inserted = 0
         if contracts:
             selected_chain = OptionChain(
@@ -197,6 +211,32 @@ def _candidate_contracts(
     if config.max_contracts is not None:
         return contracts[: config.max_contracts]
     return contracts
+
+
+def _closest_delta_contracts(
+    contracts: list[OptionContract],
+    config: ThetaDataEODIngestionConfig,
+    provider: ThetaDataEODProvider,
+) -> list[OptionContract]:
+    if config.target_delta is None:
+        return contracts
+    candidates: list[tuple[Decimal, Decimal, OptionContract]] = []
+    for contract in contracts:
+        greeks = provider.retrieve_first_order_greeks(
+            contract,
+            config.effective_chain_as_of_date,
+            config.effective_chain_as_of_date,
+        )
+        deltas = [greek.delta for greek in greeks if greek.delta is not None]
+        if not deltas:
+            continue
+        delta = deltas[-1]
+        candidates.append((abs(delta - config.target_delta), contract.strike, contract))
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    selected = [contract for _, _, contract in candidates[: config.contracts_around_target]]
+    if config.max_contracts is not None:
+        return selected[: config.max_contracts]
+    return selected
 
 
 def _merge_open_interest(

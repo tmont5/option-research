@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Self
 
@@ -40,6 +41,13 @@ class BackfillRunnerConfig(BaseModel):
     max_dte: int = Field(default=60, ge=0)
     option_type: OptionType = Field(default=OptionType.PUT)
     include_open_interest: bool = Field(default=True)
+    target_delta: Decimal | None = Field(
+        default=None,
+        ge=Decimal("-1"),
+        le=Decimal("1"),
+        description="Optional target delta used to keep only strategy-relevant contracts.",
+    )
+    contracts_around_target: int = Field(default=5, gt=0)
     max_chunks: int | None = Field(default=None, gt=0)
     max_contracts: int | None = Field(default=None, gt=0)
     database_path: Path = Field(default=Path("runs/backfill/market_data.duckdb"))
@@ -160,6 +168,8 @@ def run_backfill_runner(
                     min_dte=config.min_dte,
                     max_dte=config.max_dte,
                     option_type=config.option_type,
+                    target_delta=config.target_delta,
+                    contracts_around_target=config.contracts_around_target,
                     max_contracts=config.max_contracts,
                 )
             )
@@ -220,6 +230,13 @@ def _write_report(result: BackfillRunnerResult) -> None:
         "end_date": result.config.end_date.isoformat(),
         "database_path": str(result.config.database_path),
         "manifest_path": str(result.config.manifest_path),
+        "min_dte": result.config.min_dte,
+        "max_dte": result.config.max_dte,
+        "option_type": result.config.option_type.value,
+        "target_delta": str(result.config.target_delta)
+        if result.config.target_delta is not None
+        else None,
+        "contracts_around_target": result.config.contracts_around_target,
         "chunks_planned": result.chunks_planned,
         "chunks_completed": result.chunks_completed,
         "entry_dates_planned": result.entry_dates_planned,
