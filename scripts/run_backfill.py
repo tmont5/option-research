@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 from options_quant.data.ingestion.backfill_runner import (
@@ -24,6 +25,8 @@ def main() -> None:
     parser.add_argument("--max-dte", type=int, default=60)
     parser.add_argument("--option-type", choices=[item.value for item in OptionType], default="put")
     parser.add_argument("--exclude-open-interest", action="store_true")
+    parser.add_argument("--target-delta", type=Decimal)
+    parser.add_argument("--contracts-around-target", type=int, default=5)
     parser.add_argument("--max-chunks", type=int)
     parser.add_argument("--max-contracts", type=int)
     parser.add_argument(
@@ -48,6 +51,8 @@ def main() -> None:
             max_dte=args.max_dte,
             option_type=OptionType(args.option_type),
             include_open_interest=not args.exclude_open_interest,
+            target_delta=args.target_delta,
+            contracts_around_target=args.contracts_around_target,
             max_chunks=args.max_chunks,
             max_contracts=args.max_contracts,
             database_path=args.database_path,

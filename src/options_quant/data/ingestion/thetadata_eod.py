@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -82,6 +83,17 @@ class ThetaDataEODIngestionConfig(BaseModel):
         gt=0,
         description="Optional cap for smoke tests or small local backfills.",
     )
+    target_delta: Decimal | None = Field(
+        default=None,
+        ge=Decimal("-1"),
+        le=Decimal("1"),
+        description="Optional target delta used to narrow the contract universe.",
+    )
+    contracts_around_target: int = Field(
+        default=5,
+        gt=0,
+        description="Number of closest-delta contracts to keep when target_delta is set.",
+    )
 
     @model_validator(mode="after")
     def validate_ranges(self) -> Self:
@@ -124,12 +136,20 @@ class ThetaDataEODIngestionPipeline:
             config.end_date,
         )
         self._storage.underlying_prices.bulk_insert(underlying_prices)
+        chain_as_of_date = _chain_as_of_date(config, underlying_prices)
 
         chain = self._provider.retrieve_option_chain(
             config.symbol,
-            config.effective_chain_as_of_date,
+            chain_as_of_date,
         )
-        contracts = _candidate_contracts(chain, config)
+        contracts = _candidate_contracts(chain, config, chain_as_of_date)
+        if config.target_delta is not None:
+            contracts = _closest_delta_contracts(
+                contracts,
+                config,
+                self._provider,
+                chain_as_of_date,
+            )
         option_chains_inserted = 0
         if contracts:
             selected_chain = OptionChain(
@@ -183,20 +203,100 @@ class ThetaDataEODIngestionPipeline:
 def _candidate_contracts(
     chain: OptionChain,
     config: ThetaDataEODIngestionConfig,
+    chain_date: date | None = None,
 ) -> list[OptionContract]:
-    chain_date = config.effective_chain_as_of_date
-    min_expiration = chain_date + timedelta(days=config.min_dte)
-    max_expiration = chain_date + timedelta(days=config.max_dte)
+    effective_chain_date = chain_date or config.effective_chain_as_of_date
+    min_expiration = effective_chain_date + timedelta(days=config.min_dte)
+    max_expiration = effective_chain_date + timedelta(days=config.max_dte)
+    typed_contracts = [
+        contract for contract in chain.contracts if contract.option_type is config.option_type
+    ]
     contracts = [
         contract
-        for contract in chain.contracts
-        if contract.option_type is config.option_type
-        and min_expiration <= contract.expiration <= max_expiration
+        for contract in typed_contracts
+        if min_expiration <= contract.expiration <= max_expiration
     ]
+    if not contracts:
+        contracts = _nearest_expiration_contracts(
+            typed_contracts,
+            effective_chain_date,
+            config.min_dte,
+            config.max_dte,
+        )
     contracts.sort(key=lambda contract: (contract.expiration, contract.strike))
     if config.max_contracts is not None:
         return contracts[: config.max_contracts]
     return contracts
+
+
+def _nearest_expiration_contracts(
+    contracts: list[OptionContract],
+    chain_date: date,
+    min_dte: int,
+    max_dte: int,
+) -> list[OptionContract]:
+    if not contracts:
+        return []
+    target_dte = Decimal(min_dte + max_dte) / Decimal("2")
+    expirations = sorted({contract.expiration for contract in contracts})
+    expiration = min(
+        expirations,
+        key=lambda item: (
+            _expiration_window_distance((item - chain_date).days, min_dte, max_dte),
+            abs(Decimal((item - chain_date).days) - target_dte),
+            item,
+        ),
+    )
+    return [contract for contract in contracts if contract.expiration == expiration]
+
+
+def _expiration_window_distance(dte: int, min_dte: int, max_dte: int) -> int:
+    if dte < min_dte:
+        return min_dte - dte
+    if dte > max_dte:
+        return dte - max_dte
+    return 0
+
+
+def _closest_delta_contracts(
+    contracts: list[OptionContract],
+    config: ThetaDataEODIngestionConfig,
+    provider: ThetaDataEODProvider,
+    chain_date: date | None = None,
+) -> list[OptionContract]:
+    if config.target_delta is None:
+        return contracts
+    effective_chain_date = chain_date or config.effective_chain_as_of_date
+    candidates: list[tuple[Decimal, Decimal, OptionContract]] = []
+    for contract in contracts:
+        greeks = provider.retrieve_first_order_greeks(
+            contract,
+            effective_chain_date,
+            effective_chain_date,
+        )
+        deltas = [greek.delta for greek in greeks if greek.delta is not None]
+        if not deltas:
+            continue
+        delta = deltas[-1]
+        candidates.append((abs(delta - config.target_delta), contract.strike, contract))
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    selected = [contract for _, _, contract in candidates[: config.contracts_around_target]]
+    if config.max_contracts is not None:
+        return selected[: config.max_contracts]
+    return selected
+
+
+def _chain_as_of_date(
+    config: ThetaDataEODIngestionConfig,
+    underlying_prices: list[UnderlyingPrice],
+) -> date:
+    if config.chain_as_of_date is not None:
+        available_dates = sorted({price.timestamp.date() for price in underlying_prices})
+        for available_date in available_dates:
+            if available_date >= config.chain_as_of_date:
+                return available_date
+        return config.chain_as_of_date
+    return config.effective_chain_as_of_date
 
 
 def _merge_open_interest(

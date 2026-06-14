@@ -23,6 +23,11 @@ from options_quant.data.storage import DuckDBStorage
 class MockBackfillProvider:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
+        self.delta_by_strike = {
+            Decimal("480"): Decimal("-0.19"),
+            Decimal("470"): Decimal("-0.32"),
+            Decimal("460"): Decimal("-0.08"),
+        }
 
     def retrieve_underlying_eod_prices(
         self,
@@ -57,6 +62,12 @@ class MockBackfillProvider:
                     strike=Decimal("470"),
                     option_type=OptionType.PUT,
                 ),
+                OptionContract(
+                    underlying_symbol=symbol,
+                    expiration=as_of_date + timedelta(days=35),
+                    strike=Decimal("460"),
+                    option_type=OptionType.PUT,
+                ),
             ),
         )
 
@@ -88,7 +99,7 @@ class MockBackfillProvider:
             OptionGreek(
                 contract=contract,
                 timestamp=datetime.combine(start_date, datetime.min.time(), tzinfo=UTC),
-                delta=Decimal("-0.10"),
+                delta=self.delta_by_strike[contract.strike],
                 implied_volatility=Decimal("0.20"),
             )
         ]
@@ -181,5 +192,36 @@ def test_backfill_runner_reset_database_removes_prior_rows(tmp_path: Path) -> No
             len(storage.option_quotes.retrieve_by_date_range(date(2025, 1, 1), date(2025, 1, 20)))
             == 1
         )
+    finally:
+        storage.close()
+
+
+def test_backfill_runner_can_select_contracts_by_target_delta(tmp_path: Path) -> None:
+    provider = MockBackfillProvider()
+    database_path = tmp_path / "target_delta.duckdb"
+
+    result = run_backfill_runner(
+        BackfillRunnerConfig(
+            symbol="SPY",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 20),
+            min_dte=30,
+            max_dte=35,
+            target_delta=Decimal("-0.20"),
+            contracts_around_target=1,
+            database_path=database_path,
+            manifest_path=tmp_path / "manifest.json",
+            report_path=tmp_path / "report.md",
+            reset_database=True,
+        ),
+        provider=provider,
+    )
+
+    assert result.contracts_selected == 1
+    assert result.option_quotes == 1
+    storage = DuckDBStorage(database_path)
+    try:
+        quote = storage.option_quotes.retrieve_by_date(date(2025, 1, 1))[0]
+        assert quote.contract.strike == Decimal("480")
     finally:
         storage.close()

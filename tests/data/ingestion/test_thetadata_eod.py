@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Generator
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -125,7 +126,7 @@ class MockEODProvider:
 
 
 @pytest.fixture
-def storage() -> DuckDBStorage:
+def storage() -> Generator[DuckDBStorage]:
     duckdb_storage = DuckDBStorage()
     try:
         yield duckdb_storage
@@ -169,7 +170,16 @@ def test_pipeline_ingests_filtered_eod_rows_into_storage(storage: DuckDBStorage)
 
 
 def test_pipeline_allows_empty_candidate_set(storage: DuckDBStorage) -> None:
-    provider = MockEODProvider()
+    class NoPutProvider(MockEODProvider):
+        def retrieve_option_chain(self, symbol: str, as_of_date: date) -> OptionChain:
+            self.calls.append(("chain", (symbol, as_of_date)))
+            return OptionChain(
+                underlying_symbol=symbol,
+                timestamp=datetime.combine(as_of_date, datetime.min.time(), tzinfo=UTC),
+                contracts=(self.unselected_call,),
+            )
+
+    provider = NoPutProvider()
     pipeline = ThetaDataEODIngestionPipeline(provider, storage)
 
     result = pipeline.ingest(
@@ -186,6 +196,47 @@ def test_pipeline_allows_empty_candidate_set(storage: DuckDBStorage) -> None:
     assert result.option_chains == 0
     assert storage.option_quotes.retrieve_by_date(date(2026, 6, 10)) == []
     assert storage.option_greeks.retrieve_by_date(date(2026, 6, 10)) == []
+
+
+def test_pipeline_uses_nearest_expiration_when_dte_window_is_empty(
+    storage: DuckDBStorage,
+) -> None:
+    provider = MockEODProvider()
+    pipeline = ThetaDataEODIngestionPipeline(provider, storage)
+
+    result = pipeline.ingest(
+        ThetaDataEODIngestionConfig(
+            symbol="SPY",
+            start_date=date(2026, 6, 10),
+            end_date=date(2026, 6, 10),
+            min_dte=1,
+            max_dte=5,
+        )
+    )
+
+    assert result.contracts_selected == 1
+    assert storage.option_quotes.retrieve_by_date(date(2026, 6, 10))[0].contract == (
+        provider.selected_contract
+    )
+
+
+def test_pipeline_uses_first_market_date_for_chain_discovery(storage: DuckDBStorage) -> None:
+    provider = MockEODProvider()
+    pipeline = ThetaDataEODIngestionPipeline(provider, storage)
+
+    result = pipeline.ingest(
+        ThetaDataEODIngestionConfig(
+            symbol="SPY",
+            start_date=date(2026, 6, 8),
+            end_date=date(2026, 6, 10),
+            chain_as_of_date=date(2026, 6, 8),
+            min_dte=30,
+            max_dte=45,
+        )
+    )
+
+    assert result.contracts_selected == 1
+    assert ("chain", ("SPY", date(2026, 6, 10))) in provider.calls
 
 
 def test_ingestion_config_validates_ranges() -> None:
