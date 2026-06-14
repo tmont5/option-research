@@ -136,14 +136,20 @@ class ThetaDataEODIngestionPipeline:
             config.end_date,
         )
         self._storage.underlying_prices.bulk_insert(underlying_prices)
+        chain_as_of_date = _chain_as_of_date(config, underlying_prices)
 
         chain = self._provider.retrieve_option_chain(
             config.symbol,
-            config.effective_chain_as_of_date,
+            chain_as_of_date,
         )
-        contracts = _candidate_contracts(chain, config)
+        contracts = _candidate_contracts(chain, config, chain_as_of_date)
         if config.target_delta is not None:
-            contracts = _closest_delta_contracts(contracts, config, self._provider)
+            contracts = _closest_delta_contracts(
+                contracts,
+                config,
+                self._provider,
+                chain_as_of_date,
+            )
         option_chains_inserted = 0
         if contracts:
             selected_chain = OptionChain(
@@ -197,10 +203,11 @@ class ThetaDataEODIngestionPipeline:
 def _candidate_contracts(
     chain: OptionChain,
     config: ThetaDataEODIngestionConfig,
+    chain_date: date | None = None,
 ) -> list[OptionContract]:
-    chain_date = config.effective_chain_as_of_date
-    min_expiration = chain_date + timedelta(days=config.min_dte)
-    max_expiration = chain_date + timedelta(days=config.max_dte)
+    effective_chain_date = chain_date or config.effective_chain_as_of_date
+    min_expiration = effective_chain_date + timedelta(days=config.min_dte)
+    max_expiration = effective_chain_date + timedelta(days=config.max_dte)
     contracts = [
         contract
         for contract in chain.contracts
@@ -217,15 +224,17 @@ def _closest_delta_contracts(
     contracts: list[OptionContract],
     config: ThetaDataEODIngestionConfig,
     provider: ThetaDataEODProvider,
+    chain_date: date | None = None,
 ) -> list[OptionContract]:
     if config.target_delta is None:
         return contracts
+    effective_chain_date = chain_date or config.effective_chain_as_of_date
     candidates: list[tuple[Decimal, Decimal, OptionContract]] = []
     for contract in contracts:
         greeks = provider.retrieve_first_order_greeks(
             contract,
-            config.effective_chain_as_of_date,
-            config.effective_chain_as_of_date,
+            effective_chain_date,
+            effective_chain_date,
         )
         deltas = [greek.delta for greek in greeks if greek.delta is not None]
         if not deltas:
@@ -237,6 +246,19 @@ def _closest_delta_contracts(
     if config.max_contracts is not None:
         return selected[: config.max_contracts]
     return selected
+
+
+def _chain_as_of_date(
+    config: ThetaDataEODIngestionConfig,
+    underlying_prices: list[UnderlyingPrice],
+) -> date:
+    if config.chain_as_of_date is not None:
+        available_dates = sorted({price.timestamp.date() for price in underlying_prices})
+        for available_date in available_dates:
+            if available_date >= config.chain_as_of_date:
+                return available_date
+        return config.chain_as_of_date
+    return config.effective_chain_as_of_date
 
 
 def _merge_open_interest(
