@@ -86,6 +86,21 @@ class ThetaDataPythonClient:
     }
     DEFAULT_ENDPOINT_PARAMS = {
         "/v2/list/contracts": {"request_type": "quote"},
+        "/v2/hist/option/greeks": {
+            "interval": "1m",
+            "start_time": "16:00:00",
+            "end_time": "16:00:00",
+        },
+        "/v2/hist/option/greeks_first_order": {
+            "interval": "1m",
+            "start_time": "16:00:00",
+            "end_time": "16:00:00",
+        },
+        "/v2/hist/option/implied_volatility": {
+            "interval": "1m",
+            "start_time": "16:00:00",
+            "end_time": "16:00:00",
+        },
     }
     DEFAULT_PARAMETER_ALIASES = {
         "root": "symbol",

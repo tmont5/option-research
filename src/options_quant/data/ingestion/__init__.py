@@ -7,6 +7,12 @@ from options_quant.data.ingestion.backfill_plan import (
     build_backfill_plan,
     write_backfill_manifest,
 )
+from options_quant.data.ingestion.backfill_runner import (
+    BackfillChunkResult,
+    BackfillRunnerConfig,
+    BackfillRunnerResult,
+    run_backfill_runner,
+)
 from options_quant.data.ingestion.thetadata_eod import (
     ThetaDataEODIngestionConfig,
     ThetaDataEODIngestionPipeline,
@@ -17,9 +23,13 @@ __all__ = [
     "BackfillPlanConfig",
     "BackfillPlanResult",
     "BackfillTask",
+    "BackfillChunkResult",
+    "BackfillRunnerConfig",
+    "BackfillRunnerResult",
     "ThetaDataEODIngestionConfig",
     "ThetaDataEODIngestionPipeline",
     "ThetaDataEODIngestionResult",
     "build_backfill_plan",
+    "run_backfill_runner",
     "write_backfill_manifest",
 ]
