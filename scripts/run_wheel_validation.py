@@ -26,6 +26,11 @@ def main() -> None:
     parser.add_argument("--put-min-dte", type=int, default=30)
     parser.add_argument("--put-max-dte", type=int, default=60)
     parser.add_argument("--put-target-delta", type=Decimal, default=Decimal("-0.10"))
+    parser.add_argument(
+        "--allow-concurrent-puts",
+        action="store_true",
+        help="Allow new cash-secured puts while prior puts are still open if cash is available.",
+    )
     parser.add_argument("--call-min-dte", type=int, default=30)
     parser.add_argument("--call-max-dte", type=int, default=45)
     parser.add_argument("--call-target-delta", type=Decimal, default=Decimal("0.20"))
@@ -49,6 +54,7 @@ def main() -> None:
                 call_min_dte=args.call_min_dte,
                 call_max_dte=args.call_max_dte,
                 call_target_delta=args.call_target_delta,
+                sell_puts_only_when_flat=not args.allow_concurrent_puts,
             ),
             start_date=args.start_date,
             end_date=args.end_date,

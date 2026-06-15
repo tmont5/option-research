@@ -102,6 +102,38 @@ def test_wheel_validation_skips_call_below_cost_basis(tmp_path: Path) -> None:
     assert result.snapshots[-1].open_options == 0
 
 
+def test_wheel_validation_opens_concurrent_cash_secured_puts_when_allowed(
+    tmp_path: Path,
+) -> None:
+    def runner(config: SingleTradePipelineConfig) -> SingleTradePipelineResult:
+        return _trade(
+            config,
+            expiration=date(2025, 1, 31),
+            strike=Decimal("100"),
+            entry=Decimal("1"),
+            exit_price=Decimal("0"),
+        )
+
+    result = run_wheel_validation_pipeline(
+        WheelValidationConfig(
+            strategy=WheelStrategyConfig(
+                initial_cash=Decimal("50000"),
+                sell_puts_only_when_flat=False,
+            ),
+            start_date=date(2025, 1, 3),
+            trade_count=3,
+            report_path=tmp_path / "wheel.md",
+        ),
+        trade_runner=runner,
+    )
+
+    assert len(result.option_trades) == 3
+    assert result.skipped_entries == ()
+    assert result.cash_balance == Decimal("50298.05")
+    assert result.realized_pnl == Decimal("298.05")
+    assert max(snapshot.open_options for snapshot in result.snapshots) == 3
+
+
 def _trade(
     config: SingleTradePipelineConfig,
     *,
