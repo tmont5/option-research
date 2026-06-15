@@ -39,6 +39,7 @@ def main() -> None:
     parser.add_argument("--theta-mdds-host")
     parser.add_argument("--theta-mdds-port")
     parser.add_argument("--theta-mdds-type")
+    parser.add_argument("--database-path", type=Path)
     parser.add_argument("--report-path", type=Path, default=Path("runs/wheel_validation/report.md"))
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -65,6 +66,7 @@ def main() -> None:
             theta_mdds_host=args.theta_mdds_host,
             theta_mdds_port=args.theta_mdds_port,
             theta_mdds_type=args.theta_mdds_type,
+            database_path=args.database_path,
             report_path=args.report_path,
             verbose=args.verbose,
         )

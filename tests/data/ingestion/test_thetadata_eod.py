@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -28,7 +29,7 @@ EXPIRATION = date(2026, 7, 17)
 
 class MockEODProvider:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, object]] = []
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self.selected_contract = OptionContract(
             underlying_symbol="SPY",
             expiration=EXPIRATION,
@@ -78,7 +79,7 @@ class MockEODProvider:
         start_date: date,
         end_date: date,
     ) -> list[OptionQuote]:
-        self.calls.append(("quotes", contract))
+        self.calls.append(("quotes", (contract, start_date, end_date)))
         return [
             OptionQuote(
                 contract=contract,
@@ -97,7 +98,7 @@ class MockEODProvider:
         start_date: date,
         end_date: date,
     ) -> list[OptionGreek]:
-        self.calls.append(("greeks", contract))
+        self.calls.append(("greeks", (contract, start_date, end_date)))
         return [
             OptionGreek(
                 contract=contract,
@@ -115,7 +116,7 @@ class MockEODProvider:
         start_date: date,
         end_date: date,
     ) -> list[OptionOpenInterest]:
-        self.calls.append(("open_interest", contract))
+        self.calls.append(("open_interest", (contract, start_date, end_date)))
         return [
             OptionOpenInterest(
                 contract=contract,
@@ -165,8 +166,14 @@ def test_pipeline_ingests_filtered_eod_rows_into_storage(storage: DuckDBStorage)
     greek = storage.option_greeks.retrieve_by_date(date(2026, 6, 10))[0]
     assert greek.contract == provider.selected_contract
     assert greek.delta == Decimal("-0.12")
-    assert ("quotes", provider.unselected_call) not in provider.calls
-    assert ("quotes", provider.too_far_put) not in provider.calls
+    assert not any(
+        call == "quotes" and args[0] == provider.unselected_call
+        for call, args in provider.calls
+    )
+    assert not any(
+        call == "quotes" and args[0] == provider.too_far_put
+        for call, args in provider.calls
+    )
 
 
 def test_pipeline_allows_empty_candidate_set(storage: DuckDBStorage) -> None:
@@ -237,6 +244,30 @@ def test_pipeline_uses_first_market_date_for_chain_discovery(storage: DuckDBStor
 
     assert result.contracts_selected == 1
     assert ("chain", ("SPY", date(2026, 6, 10))) in provider.calls
+
+
+def test_pipeline_chunks_contract_history_requests(storage: DuckDBStorage) -> None:
+    provider = MockEODProvider()
+    pipeline = ThetaDataEODIngestionPipeline(provider, storage)
+
+    pipeline.ingest(
+        ThetaDataEODIngestionConfig(
+            symbol="SPY",
+            start_date=date(2026, 6, 10),
+            end_date=date(2026, 7, 15),
+            min_dte=30,
+            max_dte=45,
+        )
+    )
+
+    assert [
+        args[1:]
+        for call, args in provider.calls
+        if call == "greeks" and args[0] == provider.selected_contract
+    ] == [
+        (date(2026, 6, 10), date(2026, 7, 9)),
+        (date(2026, 7, 10), date(2026, 7, 15)),
+    ]
 
 
 def test_ingestion_config_validates_ranges() -> None:

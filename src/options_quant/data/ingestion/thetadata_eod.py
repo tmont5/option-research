@@ -163,26 +163,27 @@ class ThetaDataEODIngestionPipeline:
         option_quotes: list[OptionQuote] = []
         option_greeks: list[OptionGreek] = []
         for contract in contracts:
-            open_interest_by_date = {
-                observation.timestamp.date(): observation.open_interest
-                for observation in self._provider.retrieve_open_interest(
-                    contract,
-                    config.start_date,
-                    config.end_date,
-                )
-            }
+            open_interest_by_date = _retrieve_open_interest(
+                self._provider,
+                contract,
+                config.start_date,
+                config.end_date,
+            )
+            quotes = _retrieve_option_eod_quotes(
+                self._provider,
+                contract,
+                config.start_date,
+                config.end_date,
+            )
             option_quotes.extend(
                 _merge_open_interest(
-                    self._provider.retrieve_option_eod_quotes(
-                        contract,
-                        config.start_date,
-                        config.end_date,
-                    ),
+                    quotes,
                     open_interest_by_date,
                 )
             )
             option_greeks.extend(
-                self._provider.retrieve_first_order_greeks(
+                _retrieve_first_order_greeks(
+                    self._provider,
                     contract,
                     config.start_date,
                     config.end_date,
@@ -315,3 +316,63 @@ def _merge_open_interest(
         )
         for quote in quotes
     ]
+
+
+def _retrieve_open_interest(
+    provider: ThetaDataEODProvider,
+    contract: OptionContract,
+    start_date: date,
+    end_date: date,
+) -> dict[date, int]:
+    observations: dict[date, int] = {}
+    for chunk_start, chunk_end in _date_chunks(start_date, end_date, days=30):
+        observations.update(
+            {
+                observation.timestamp.date(): observation.open_interest
+                for observation in provider.retrieve_open_interest(
+                    contract,
+                    chunk_start,
+                    chunk_end,
+                )
+            }
+        )
+    return observations
+
+
+def _retrieve_option_eod_quotes(
+    provider: ThetaDataEODProvider,
+    contract: OptionContract,
+    start_date: date,
+    end_date: date,
+) -> list[OptionQuote]:
+    quotes: list[OptionQuote] = []
+    for chunk_start, chunk_end in _date_chunks(start_date, end_date, days=30):
+        quotes.extend(provider.retrieve_option_eod_quotes(contract, chunk_start, chunk_end))
+    return quotes
+
+
+def _retrieve_first_order_greeks(
+    provider: ThetaDataEODProvider,
+    contract: OptionContract,
+    start_date: date,
+    end_date: date,
+) -> list[OptionGreek]:
+    greeks: list[OptionGreek] = []
+    for chunk_start, chunk_end in _date_chunks(start_date, end_date, days=30):
+        greeks.extend(provider.retrieve_first_order_greeks(contract, chunk_start, chunk_end))
+    return greeks
+
+
+def _date_chunks(
+    start_date: date,
+    end_date: date,
+    *,
+    days: int,
+) -> list[tuple[date, date]]:
+    chunks: list[tuple[date, date]] = []
+    chunk_start = start_date
+    while chunk_start <= end_date:
+        chunk_end = min(chunk_start + timedelta(days=days - 1), end_date)
+        chunks.append((chunk_start, chunk_end))
+        chunk_start = chunk_end + timedelta(days=1)
+    return chunks
