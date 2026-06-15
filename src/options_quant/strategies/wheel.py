@@ -34,11 +34,11 @@ class WheelStrategyConfig(StrategyModel):
 
     put_min_dte: int = Field(default=30, ge=0)
     put_max_dte: int = Field(default=60, ge=0)
-    put_target_delta: Decimal = Field(default=Decimal("-0.10"), ge=Decimal("-1"), le=ZERO)
+    put_target_delta: Decimal = Field(default=Decimal("-0.25"), ge=Decimal("-1"), le=ZERO)
 
     call_min_dte: int = Field(default=30, ge=0)
     call_max_dte: int = Field(default=45, ge=0)
-    call_target_delta: Decimal = Field(default=Decimal("0.20"), ge=ZERO, le=Decimal("1"))
+    call_target_delta: Decimal = Field(default=Decimal("0.25"), ge=ZERO, le=Decimal("1"))
     call_strike_policy: WheelCoveredCallStrikePolicy = Field(
         default=WheelCoveredCallStrikePolicy.ABOVE_COST_BASIS_DELTA_TARGET
     )

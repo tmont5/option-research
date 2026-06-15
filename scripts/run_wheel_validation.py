@@ -25,7 +25,7 @@ def main() -> None:
     parser.add_argument("--initial-cash", type=Decimal, default=Decimal("100000"))
     parser.add_argument("--put-min-dte", type=int, default=30)
     parser.add_argument("--put-max-dte", type=int, default=60)
-    parser.add_argument("--put-target-delta", type=Decimal, default=Decimal("-0.10"))
+    parser.add_argument("--put-target-delta", type=Decimal, default=Decimal("-0.25"))
     parser.add_argument(
         "--allow-concurrent-puts",
         action="store_true",
@@ -33,7 +33,7 @@ def main() -> None:
     )
     parser.add_argument("--call-min-dte", type=int, default=30)
     parser.add_argument("--call-max-dte", type=int, default=45)
-    parser.add_argument("--call-target-delta", type=Decimal, default=Decimal("0.20"))
+    parser.add_argument("--call-target-delta", type=Decimal, default=Decimal("0.25"))
     parser.add_argument("--commission-per-contract", type=Decimal, default=Decimal("0.65"))
     parser.add_argument("--slippage-per-contract", type=Decimal, default=Decimal("0.00"))
     parser.add_argument("--theta-mdds-host")
