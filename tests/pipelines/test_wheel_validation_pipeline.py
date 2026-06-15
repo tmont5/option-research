@@ -11,7 +11,14 @@ from options_quant.backtest import (
     ClosedBacktestPosition,
     ExitReason,
 )
-from options_quant.data.models import OptionContract, OptionQuote, OptionType, UnderlyingPrice
+from options_quant.data.models import (
+    OptionContract,
+    OptionGreek,
+    OptionQuote,
+    OptionType,
+    UnderlyingPrice,
+)
+from options_quant.data.storage import DuckDBStorage
 from options_quant.pipelines.single_trade import (
     SingleTradePipelineConfig,
     SingleTradePipelineResult,
@@ -132,6 +139,80 @@ def test_wheel_validation_opens_concurrent_cash_secured_puts_when_allowed(
     assert result.cash_balance == Decimal("50298.05")
     assert result.realized_pnl == Decimal("298.05")
     assert max(snapshot.open_options for snapshot in result.snapshots) == 3
+
+
+def test_wheel_validation_can_replay_single_trade_from_duckdb(tmp_path: Path) -> None:
+    database_path = tmp_path / "compact.duckdb"
+    contract = OptionContract(
+        underlying_symbol="SPY",
+        expiration=date(2025, 1, 10),
+        strike=Decimal("100"),
+        option_type=OptionType.PUT,
+    )
+    storage = DuckDBStorage(database_path)
+    try:
+        storage.underlying_prices.bulk_insert(
+            [
+                UnderlyingPrice(
+                    symbol="SPY",
+                    timestamp=datetime(2025, 1, 3, tzinfo=UTC),
+                    price=Decimal("101"),
+                ),
+                UnderlyingPrice(
+                    symbol="SPY",
+                    timestamp=datetime(2025, 1, 10, tzinfo=UTC),
+                    price=Decimal("95"),
+                ),
+            ]
+        )
+        storage.option_quotes.insert(
+            OptionQuote(
+                contract=contract,
+                timestamp=datetime(2025, 1, 3, tzinfo=UTC),
+                bid=Decimal("2"),
+                ask=Decimal("2"),
+                mark=Decimal("2"),
+            )
+        )
+        storage.option_greeks.bulk_insert(
+            [
+                OptionGreek(
+                    contract=contract,
+                    timestamp=datetime(2025, 1, 3, tzinfo=UTC),
+                    delta=Decimal("-0.25"),
+                    implied_volatility=Decimal("0.20"),
+                ),
+                OptionGreek(
+                    contract=contract,
+                    timestamp=datetime(2025, 1, 10, tzinfo=UTC),
+                    delta=Decimal("-1"),
+                    implied_volatility=Decimal("0.20"),
+                ),
+            ]
+        )
+    finally:
+        storage.close()
+
+    result = run_wheel_validation_pipeline(
+        WheelValidationConfig(
+            strategy=WheelStrategyConfig(
+                initial_cash=Decimal("10000"),
+                put_min_dte=7,
+                put_max_dte=7,
+            ),
+            start_date=date(2025, 1, 3),
+            trade_count=1,
+            database_path=database_path,
+            report_path=tmp_path / "wheel.md",
+        ),
+    )
+
+    assert [event.event_type for event in result.events] == ["put_assigned"]
+    assert len(result.option_trades) == 1
+    assert result.failed_entries == ()
+    assert result.option_trades[0].selected_candidate.delta == Decimal("-0.25")
+    assert result.option_trades[0].quote_rows == 1
+    assert result.snapshots[-1].share_quantity == 100
 
 
 def _trade(

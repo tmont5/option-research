@@ -14,15 +14,27 @@ from typing import Any, Self, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from options_quant.backtest import ClosedBacktestPosition
-from options_quant.data.models import OptionType
+from options_quant.data.models import OptionChain, OptionGreek, OptionType, UnderlyingPrice
 from options_quant.data.providers import ThetaDataProvider, ThetaDataPythonClient
 from options_quant.data.providers.thetadata_options import ThetaDataOptionEndpoints
+from options_quant.data.storage import DuckDBStorage
 from options_quant.pipelines.single_trade import (
     SingleTradeMarketDataProvider,
     SingleTradeOptionEndpoints,
     SingleTradePipelineConfig,
     SingleTradePipelineResult,
+    _audit_trade,
+    _quote_for_date,
+    _run_backtest,
     run_single_trade_pipeline,
+)
+from options_quant.pipelines.single_trade import (
+    _write_report as _write_single_trade_report,
+)
+from options_quant.strategies.selection import (
+    ContractSelectionEngine,
+    OptionSelectionCandidate,
+    OptionSelectionQuery,
 )
 from options_quant.strategies.wheel import WheelStrategyConfig
 
@@ -45,6 +57,7 @@ class WheelValidationConfig(BaseModel):
     expiration_search_window_days: int = Field(default=14, ge=0)
     commission_per_contract: Decimal = Field(default=Decimal("0.65"), ge=ZERO)
     slippage_per_contract: Decimal = Field(default=Decimal("0.00"), ge=ZERO)
+    database_path: Path | None = Field(default=None)
     report_path: Path = Field(default=Path("runs/wheel_validation/report.md"))
     theta_mdds_host: str | None = Field(default=None, min_length=1)
     theta_mdds_port: str | None = Field(default=None, min_length=1)
@@ -113,7 +126,12 @@ def run_wheel_validation_pipeline(
     trade_runner: SingleTradeRunner | None = None,
 ) -> WheelValidationResult:
     """Run an initial assignment-aware wheel lifecycle test."""
-    runner = trade_runner if trade_runner is not None else _live_trade_runner(config)
+    if trade_runner is not None:
+        runner = trade_runner
+    elif config.database_path is not None:
+        runner = _duckdb_trade_runner(config.database_path)
+    else:
+        runner = _live_trade_runner(config)
     entry_dates = _entry_dates(config)
     option_trades: list[SingleTradePipelineResult] = []
     market_observations: list[SingleTradePipelineResult] = []
@@ -508,6 +526,160 @@ def _live_trade_runner(config: WheelValidationConfig) -> SingleTradeRunner:
         return run_single_trade_pipeline(config, endpoints=endpoints, provider=provider)
 
     return run
+
+
+def _duckdb_trade_runner(database_path: Path) -> SingleTradeRunner:
+    def run(config: SingleTradePipelineConfig) -> SingleTradePipelineResult:
+        storage = DuckDBStorage(database_path)
+        try:
+            return _run_single_trade_from_storage(config, storage)
+        finally:
+            storage.close()
+
+    return run
+
+
+def _run_single_trade_from_storage(
+    config: SingleTradePipelineConfig,
+    storage: DuckDBStorage,
+) -> SingleTradePipelineResult:
+    expiration_candidates = _stored_expiration_candidates(config, storage)
+    selected_greeks: list[OptionGreek] = []
+    selected_underlying: dict[date, UnderlyingPrice] = {}
+    selected = None
+    expiration: date | None = None
+
+    for candidate_expiration in expiration_candidates:
+        entry_greeks = [
+            greek
+            for greek in storage.option_greeks.retrieve_by_date(config.entry_date)
+            if greek.contract.underlying_symbol == config.symbol
+            and greek.contract.option_type is config.option_type
+            and greek.contract.expiration == candidate_expiration
+        ]
+        if not entry_greeks:
+            continue
+        underlying = _stored_underlying_by_date(
+            config,
+            storage,
+            config.entry_date,
+            candidate_expiration,
+        )
+        try:
+            selected = _select_stored_contract(
+                config,
+                candidate_expiration,
+                entry_greeks,
+                underlying,
+            )
+        except ValueError:
+            continue
+        selected_greeks = entry_greeks
+        selected_underlying = underlying
+        expiration = candidate_expiration
+        break
+
+    if selected is None or expiration is None:
+        raise ValueError("no stored candidate expiration returned entry Greeks")
+
+    quotes = [
+        quote
+        for quote in storage.option_quotes.retrieve_by_date_range(config.entry_date, expiration)
+        if quote.contract == selected.contract
+    ]
+    contract_greeks = [
+        greek
+        for greek in storage.option_greeks.retrieve_by_date_range(config.entry_date, expiration)
+        if greek.contract == selected.contract
+    ]
+    entry_quote = _quote_for_date(quotes, config.entry_date)
+    backtest_result = _run_backtest(config, selected.contract, quotes, selected_underlying)
+    result = SingleTradePipelineResult(
+        config=config,
+        expiration_candidates=tuple(expiration_candidates),
+        chain_contracts=len(selected_greeks),
+        greek_rows=len(selected_greeks) + len(contract_greeks),
+        quote_rows=len(quotes),
+        underlying_rows=len(selected_underlying),
+        selected_candidate=selected,
+        entry_quote=entry_quote,
+        underlying_prices=tuple(
+            sorted(selected_underlying.values(), key=lambda underlying: underlying.timestamp)
+        ),
+        backtest_result=backtest_result,
+        audit=_audit_trade(config, selected.contract, entry_quote, backtest_result),
+    )
+    config.report_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_single_trade_report(config.report_path, result)
+    return result
+
+
+def _stored_expiration_candidates(
+    config: SingleTradePipelineConfig,
+    storage: DuckDBStorage,
+) -> list[date]:
+    target_expiration = config.entry_date + timedelta(days=config.target_dte)
+    min_expiration = target_expiration - timedelta(days=config.expiration_search_window_days)
+    max_expiration = target_expiration + timedelta(days=config.expiration_search_window_days)
+    expirations = sorted(
+        {
+            greek.contract.expiration
+            for greek in storage.option_greeks.retrieve_by_date(config.entry_date)
+            if greek.contract.underlying_symbol == config.symbol
+            and greek.contract.option_type is config.option_type
+            and min_expiration <= greek.contract.expiration <= max_expiration
+        }
+    )
+    if not expirations:
+        raise ValueError("no stored expirations found near target DTE")
+    return sorted(
+        expirations, key=lambda expiration: (abs((expiration - target_expiration).days), expiration)
+    )
+
+
+def _stored_underlying_by_date(
+    config: SingleTradePipelineConfig,
+    storage: DuckDBStorage,
+    start_date: date,
+    end_date: date,
+) -> dict[date, UnderlyingPrice]:
+    return {
+        underlying.timestamp.date(): underlying
+        for underlying in storage.underlying_prices.retrieve_by_date_range(start_date, end_date)
+        if underlying.symbol == config.symbol
+    }
+
+
+def _select_stored_contract(
+    config: SingleTradePipelineConfig,
+    expiration: date,
+    greeks: list[OptionGreek],
+    underlying_by_date: dict[date, UnderlyingPrice],
+) -> OptionSelectionCandidate:
+    underlying = underlying_by_date.get(config.entry_date)
+    if underlying is None:
+        raise ValueError("missing entry-date underlying price")
+    chain = OptionChain(
+        underlying_symbol=config.symbol,
+        timestamp=underlying.timestamp,
+        contracts=tuple(greek.contract for greek in greeks),
+    )
+    selector = ContractSelectionEngine(
+        chain,
+        underlying.price,
+        as_of_date=config.entry_date,
+        greeks=greeks,
+    )
+    selected = selector.best(
+        OptionSelectionQuery(
+            option_type=config.option_type,
+            target_dte=(expiration - config.entry_date).days,
+            target_delta=config.target_delta,
+        )
+    )
+    if selected is None:
+        raise ValueError("contract selector found no stored candidate")
+    return selected
 
 
 def _single_trade_config(
