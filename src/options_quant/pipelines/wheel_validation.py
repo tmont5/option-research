@@ -125,49 +125,42 @@ def run_wheel_validation_pipeline(
     realized_pnl = ZERO
     share_quantity = 0
     share_cost_basis: Decimal | None = None
-    put_active_until: date | None = None
-    call_active_until: date | None = None
+    pending_puts: list[SingleTradePipelineResult] = []
+    pending_calls: list[SingleTradePipelineResult] = []
 
-    for index, entry_date in enumerate(entry_dates, start=1):
-        if put_active_until is not None and entry_date < put_active_until:
-            skips.append((entry_date, f"short put active until {put_active_until}"))
-            continue
-        if put_active_until is not None and entry_date >= put_active_until:
-            put_active_until = None
-        if call_active_until is not None and entry_date < call_active_until:
-            skips.append((entry_date, f"covered call active until {call_active_until}"))
-            continue
-        if call_active_until is not None and entry_date >= call_active_until:
-            call_active_until = None
+    def settle_positions(as_of_date: date | None = None) -> None:
+        nonlocal cash_balance, realized_pnl, share_quantity, share_cost_basis
 
-        if share_quantity == 0:
-            trade_config = _single_trade_config(config, entry_date, index, OptionType.PUT)
-            try:
-                trade = runner(trade_config)
-            except Exception as error:
-                failures.append((entry_date, str(error)))
-                continue
-            option_trades.append(trade)
-            market_observations.append(trade)
-            put_active_until = None
-            cash_balance += trade.audit.entry_net_cash_flow
+        def is_due(trade: SingleTradePipelineResult) -> bool:
+            closed = _closed(trade)
+            return closed is not None and (as_of_date is None or closed.exit_date <= as_of_date)
+
+        for trade in sorted([item for item in pending_puts if is_due(item)], key=_exit_date):
+            pending_puts.remove(trade)
             closed = _closed(trade)
             if closed is None:
-                skips.append((entry_date, "put did not close in single-trade audit"))
                 continue
-            put_active_until = closed.exit_date
             if trade.audit.exit_price is not None and trade.audit.exit_price > ZERO:
                 assignment_cash = trade.selected_candidate.contract.strike * CONTRACT_MULTIPLIER
                 cash_balance -= assignment_cash
-                share_quantity = config.strategy.share_lot_size
+                added_shares = config.strategy.share_lot_size
                 net_premium_per_share = trade.audit.entry_net_cash_flow / CONTRACT_MULTIPLIER
-                share_cost_basis = trade.selected_candidate.contract.strike - net_premium_per_share
+                assigned_basis = trade.selected_candidate.contract.strike - net_premium_per_share
+                total_shares = share_quantity + added_shares
+                if share_cost_basis is None or share_quantity == 0:
+                    share_cost_basis = assigned_basis
+                else:
+                    share_cost_basis = (
+                        (share_cost_basis * Decimal(share_quantity))
+                        + (assigned_basis * Decimal(added_shares))
+                    ) / Decimal(total_shares)
+                share_quantity = total_shares
                 events.append(
                     WheelEvent(
                         event_date=closed.exit_date,
                         event_type="put_assigned",
                         description=(
-                            f"assigned {share_quantity} shares at "
+                            f"assigned {added_shares} shares at "
                             f"{trade.selected_candidate.contract.strike}"
                         ),
                         cash_balance=cash_balance,
@@ -189,10 +182,99 @@ def run_wheel_validation_pipeline(
                         share_cost_basis=share_cost_basis,
                     )
                 )
+
+        for trade in sorted([item for item in pending_calls if is_due(item)], key=_exit_date):
+            pending_calls.remove(trade)
+            closed = _closed(trade)
+            if closed is None:
+                continue
+            if trade.audit.exit_price is not None and trade.audit.exit_price > ZERO:
+                stock_sale_cash = trade.selected_candidate.contract.strike * CONTRACT_MULTIPLIER
+                basis = share_cost_basis or ZERO
+                stock_pnl = (trade.selected_candidate.contract.strike - basis) * CONTRACT_MULTIPLIER
+                cash_balance += stock_sale_cash
+                realized_pnl += stock_pnl
+                share_quantity = max(0, share_quantity - config.strategy.share_lot_size)
+                if share_quantity == 0:
+                    share_cost_basis = None
+                events.append(
+                    WheelEvent(
+                        event_date=closed.exit_date,
+                        event_type="shares_called_away",
+                        description=(
+                            f"sold {config.strategy.share_lot_size} shares at "
+                            f"{trade.selected_candidate.contract.strike}"
+                        ),
+                        cash_balance=cash_balance,
+                        realized_pnl=realized_pnl,
+                        share_quantity=share_quantity,
+                        share_cost_basis=share_cost_basis,
+                    )
+                )
+            else:
+                events.append(
+                    WheelEvent(
+                        event_date=closed.exit_date,
+                        event_type="call_expired_otm",
+                        description="covered call expired out of the money",
+                        cash_balance=cash_balance,
+                        realized_pnl=realized_pnl,
+                        share_quantity=share_quantity,
+                        share_cost_basis=share_cost_basis,
+                    )
+                )
+
+    for index, entry_date in enumerate(entry_dates, start=1):
+        settle_positions(entry_date)
+
+        if share_quantity == 0:
+            if config.strategy.sell_puts_only_when_flat and pending_puts:
+                active_until = min(_exit_date(trade) for trade in pending_puts)
+                skips.append((entry_date, f"short put active until {active_until}"))
+                continue
+            trade_config = _single_trade_config(config, entry_date, index, OptionType.PUT)
+            try:
+                trade = runner(trade_config)
+            except Exception as error:
+                failures.append((entry_date, str(error)))
+                continue
+            collateral = trade.selected_candidate.contract.strike * CONTRACT_MULTIPLIER
+            if _available_cash(cash_balance, pending_puts) < collateral:
+                skips.append(
+                    (
+                        entry_date,
+                        (
+                            f"available cash {_available_cash(cash_balance, pending_puts)} "
+                            f"below put collateral {collateral}"
+                        ),
+                    )
+                )
+                market_observations.append(trade)
+                continue
+            option_trades.append(trade)
+            market_observations.append(trade)
+            cash_balance += trade.audit.entry_net_cash_flow
+            closed = _closed(trade)
+            if closed is None:
+                skips.append((entry_date, "put did not close in single-trade audit"))
+                continue
+            pending_puts.append(trade)
             continue
 
         if share_cost_basis is None:
             skips.append((entry_date, "assigned shares missing cost basis"))
+            continue
+        covered_shares = len(pending_calls) * config.strategy.share_lot_size
+        if share_quantity - covered_shares < config.strategy.share_lot_size:
+            call_active_until: date | None = min(
+                (_exit_date(trade) for trade in pending_calls), default=None
+            )
+            reason = (
+                f"covered call active until {call_active_until}"
+                if call_active_until is not None
+                else "no uncovered shares available for covered call"
+            )
+            skips.append((entry_date, reason))
             continue
         trade_config = _single_trade_config(config, entry_date, index, OptionType.CALL)
         try:
@@ -213,49 +295,16 @@ def run_wheel_validation_pipeline(
             )
             continue
         option_trades.append(trade)
-        call_active_until = None
         cash_balance += trade.audit.entry_net_cash_flow
         realized_pnl += trade.audit.entry_net_cash_flow
         closed = _closed(trade)
         if closed is None:
             skips.append((entry_date, "covered call did not close in single-trade audit"))
             continue
-        call_active_until = closed.exit_date
-        if trade.audit.exit_price is not None and trade.audit.exit_price > ZERO:
-            stock_sale_cash = trade.selected_candidate.contract.strike * CONTRACT_MULTIPLIER
-            stock_pnl = (
-                trade.selected_candidate.contract.strike - share_cost_basis
-            ) * CONTRACT_MULTIPLIER
-            cash_balance += stock_sale_cash
-            realized_pnl += stock_pnl
-            events.append(
-                WheelEvent(
-                    event_date=closed.exit_date,
-                    event_type="shares_called_away",
-                    description=(
-                        f"sold {share_quantity} shares at "
-                        f"{trade.selected_candidate.contract.strike}"
-                    ),
-                    cash_balance=cash_balance,
-                    realized_pnl=realized_pnl,
-                    share_quantity=0,
-                    share_cost_basis=None,
-                )
-            )
-            share_quantity = 0
-            share_cost_basis = None
-        else:
-            events.append(
-                WheelEvent(
-                    event_date=closed.exit_date,
-                    event_type="call_expired_otm",
-                    description="covered call expired out of the money",
-                    cash_balance=cash_balance,
-                    realized_pnl=realized_pnl,
-                    share_quantity=share_quantity,
-                    share_cost_basis=share_cost_basis,
-                )
-            )
+        pending_calls.append(trade)
+
+    settle_positions()
+    events.sort(key=lambda item: item.event_date)
 
     result = WheelValidationResult(
         config=config,
@@ -502,6 +551,25 @@ def _closed(trade: SingleTradePipelineResult) -> ClosedBacktestPosition | None:
     if not trade.backtest_result.closed_positions:
         return None
     return trade.backtest_result.closed_positions[-1]
+
+
+def _exit_date(trade: SingleTradePipelineResult) -> date:
+    closed = _closed(trade)
+    return closed.exit_date if closed is not None else date.max
+
+
+def _available_cash(
+    cash_balance: Decimal,
+    pending_puts: list[SingleTradePipelineResult],
+) -> Decimal:
+    reserved = sum(
+        (
+            trade.selected_candidate.contract.strike * CONTRACT_MULTIPLIER
+            for trade in pending_puts
+        ),
+        ZERO,
+    )
+    return cash_balance - reserved
 
 
 def _write_report(path: Path, result: WheelValidationResult) -> None:
