@@ -20,10 +20,10 @@ def test_wheel_strategy_defaults_match_v1_contract() -> None:
     assert config.share_lot_size == 100
     assert config.put_min_dte == 30
     assert config.put_max_dte == 60
-    assert config.put_target_delta == Decimal("-0.10")
+    assert config.put_target_delta == Decimal("-0.25")
     assert config.call_min_dte == 30
     assert config.call_max_dte == 45
-    assert config.call_target_delta == Decimal("0.20")
+    assert config.call_target_delta == Decimal("0.25")
     assert config.call_strike_policy is WheelCoveredCallStrikePolicy.ABOVE_COST_BASIS_DELTA_TARGET
     assert config.sell_puts_only_when_flat
     assert config.sell_calls_only_when_assigned

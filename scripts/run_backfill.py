@@ -26,7 +26,7 @@ def main() -> None:
     parser.add_argument("--option-type", choices=[item.value for item in OptionType], default="put")
     parser.add_argument("--exclude-open-interest", action="store_true")
     parser.add_argument("--target-delta", type=Decimal)
-    parser.add_argument("--contracts-around-target", type=int, default=5)
+    parser.add_argument("--contracts-around-target", type=int, default=7)
     parser.add_argument("--max-chunks", type=int)
     parser.add_argument("--max-contracts", type=int)
     parser.add_argument(

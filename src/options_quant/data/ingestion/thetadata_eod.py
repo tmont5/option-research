@@ -90,7 +90,7 @@ class ThetaDataEODIngestionConfig(BaseModel):
         description="Optional target delta used to narrow the contract universe.",
     )
     contracts_around_target: int = Field(
-        default=5,
+        default=7,
         gt=0,
         description="Number of closest-delta contracts to keep when target_delta is set.",
     )

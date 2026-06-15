@@ -27,7 +27,7 @@ When the account has no SPY shares and no open SPY option position:
 
 - Select a put candidate.
 - Default put window: 30-60 DTE.
-- Default put target delta: -0.10.
+- Default put target delta: -0.25.
 - Sell one cash-secured put only if available cash can reserve strike * 100.
 
 ### 2. Short Put State
@@ -57,7 +57,7 @@ When holding 100 SPY shares and no open call:
 
 - Select a covered call candidate.
 - Default call window: 30-45 DTE.
-- Default call target delta: +0.20.
+- Default call target delta: +0.25.
 - Call strike must be at or above cost basis unless explicitly overridden later.
 - Sell one covered call.
 
@@ -107,4 +107,3 @@ Use the existing six-month SPY window first:
 - Carry assigned shares.
 - Sell calls after assignment.
 - Compare against the current cash-settled short-put portfolio result.
-

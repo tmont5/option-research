@@ -47,7 +47,7 @@ class BackfillRunnerConfig(BaseModel):
         le=Decimal("1"),
         description="Optional target delta used to keep only strategy-relevant contracts.",
     )
-    contracts_around_target: int = Field(default=5, gt=0)
+    contracts_around_target: int = Field(default=7, gt=0)
     max_chunks: int | None = Field(default=None, gt=0)
     max_contracts: int | None = Field(default=None, gt=0)
     database_path: Path = Field(default=Path("runs/backfill/market_data.duckdb"))
