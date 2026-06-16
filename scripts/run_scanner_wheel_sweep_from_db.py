@@ -255,9 +255,15 @@ def _report(payload: dict[str, Any]) -> str:
         "- Return includes marked-to-market open shares at the final date.",
         "- Monthly returns are realized option returns only, matching the single-run wheel report.",
         "",
-        "## Top Scenarios",
+        "## Scenario Winners",
         "",
     ]
+    lines.extend(_winner_lines(rows))
+    lines.extend([
+        "",
+        "## Top Scenarios",
+        "",
+    ])
     for idx, row in enumerate(rows[:10], start=1):
         lines.extend(_scenario_lines(idx, row))
     lines.extend(["", "## Full Scenario Table", ""])
@@ -273,6 +279,77 @@ def _report(payload: dict[str, Any]) -> str:
             f"top symbol {row['top_symbol']} {row['top_symbol_pnl_pct'] * 100:.1f}%"
         )
     return "\n".join(lines) + "\n"
+
+
+def _winner_lines(rows: list[Any]) -> list[str]:
+    typed_rows = [row for row in rows if isinstance(row, dict)]
+    winners = [
+        (
+            "Highest raw return",
+            _best_row(typed_rows, lambda row: float(row["return_pct"])),
+        ),
+        (
+            "Best return under 100% max utilization",
+            _best_row(
+                typed_rows,
+                lambda row: float(row["return_pct"]),
+                lambda row: float(row["max_capital_utilization"]) <= 1.0,
+            ),
+        ),
+        (
+            "Best return with no unrealized-share dependence",
+            _best_row(
+                typed_rows,
+                lambda row: float(row["return_pct"]),
+                lambda row: abs(float(row["unrealized_share_pnl_pct"])) <= 0.01,
+            ),
+        ),
+        (
+            "Best return-to-drawdown",
+            _best_row(typed_rows, lambda row: float(row["return_to_drawdown"])),
+        ),
+        (
+            "Best return-to-drawdown with at least 5% return",
+            _best_row(
+                typed_rows,
+                lambda row: float(row["return_to_drawdown"]),
+                lambda row: float(row["return_pct"]) >= 0.05,
+            ),
+        ),
+        (
+            "Best balanced score",
+            typed_rows[0] if typed_rows else None,
+        ),
+    ]
+    lines: list[str] = []
+    seen: set[str] = set()
+    for label, row in winners:
+        if row is None:
+            lines.append(f"- {label}: n/a")
+            continue
+        duplicate = " (same scenario as above)" if row["scenario"] in seen else ""
+        seen.add(str(row["scenario"]))
+        lines.append(
+            f"- {label}: {row['scenario']}{duplicate} | "
+            f"return {row['return_pct'] * 100:.2f}%, "
+            f"max DD {row['max_drawdown'] * 100:.2f}%, "
+            f"avg/max util {row['average_capital_utilization'] * 100:.1f}%/"
+            f"{row['max_capital_utilization'] * 100:.1f}%, "
+            f"unrealized-share PnL {row['unrealized_share_pnl_pct'] * 100:.1f}%, "
+            f"top symbol {row['top_symbol']} {row['top_symbol_pnl_pct'] * 100:.1f}%"
+        )
+    return lines
+
+
+def _best_row(
+    rows: list[dict[str, Any]],
+    key: Any,
+    predicate: Any | None = None,
+) -> dict[str, Any] | None:
+    candidates = [row for row in rows if predicate is None or predicate(row)]
+    if not candidates:
+        return None
+    return max(candidates, key=key)
 
 
 def _scenario_lines(idx: int, row: dict[str, Any]) -> list[str]:
