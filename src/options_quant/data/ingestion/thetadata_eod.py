@@ -326,16 +326,13 @@ def _retrieve_open_interest(
 ) -> dict[date, int]:
     observations: dict[date, int] = {}
     for chunk_start, chunk_end in _date_chunks(start_date, end_date, days=30):
-        observations.update(
-            {
-                observation.timestamp.date(): observation.open_interest
-                for observation in provider.retrieve_open_interest(
-                    contract,
-                    chunk_start,
-                    chunk_end,
-                )
-            }
-        )
+        try:
+            rows = provider.retrieve_open_interest(contract, chunk_start, chunk_end)
+        except Exception as error:
+            if _is_no_data_error(error):
+                continue
+            raise
+        observations.update({row.timestamp.date(): row.open_interest for row in rows})
     return observations
 
 
@@ -347,7 +344,12 @@ def _retrieve_option_eod_quotes(
 ) -> list[OptionQuote]:
     quotes: list[OptionQuote] = []
     for chunk_start, chunk_end in _date_chunks(start_date, end_date, days=30):
-        quotes.extend(provider.retrieve_option_eod_quotes(contract, chunk_start, chunk_end))
+        try:
+            quotes.extend(provider.retrieve_option_eod_quotes(contract, chunk_start, chunk_end))
+        except Exception as error:
+            if _is_no_data_error(error):
+                continue
+            raise
     return quotes
 
 
@@ -359,8 +361,17 @@ def _retrieve_first_order_greeks(
 ) -> list[OptionGreek]:
     greeks: list[OptionGreek] = []
     for chunk_start, chunk_end in _date_chunks(start_date, end_date, days=30):
-        greeks.extend(provider.retrieve_first_order_greeks(contract, chunk_start, chunk_end))
+        try:
+            greeks.extend(provider.retrieve_first_order_greeks(contract, chunk_start, chunk_end))
+        except Exception as error:
+            if _is_no_data_error(error):
+                continue
+            raise
     return greeks
+
+
+def _is_no_data_error(error: Exception) -> bool:
+    return error.__class__.__name__ == "NoDataFoundError" or "No data found" in str(error)
 
 
 def _date_chunks(

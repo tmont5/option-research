@@ -270,6 +270,56 @@ def test_pipeline_chunks_contract_history_requests(storage: DuckDBStorage) -> No
     ]
 
 
+def test_pipeline_treats_no_data_history_chunks_as_empty(storage: DuckDBStorage) -> None:
+    class PartialNoDataProvider(MockEODProvider):
+        def retrieve_option_eod_quotes(
+            self,
+            contract: OptionContract,
+            start_date: date,
+            end_date: date,
+        ) -> list[OptionQuote]:
+            if start_date == date(2026, 7, 10):
+                raise RuntimeError("No data found for quote chunk")
+            return super().retrieve_option_eod_quotes(contract, start_date, end_date)
+
+        def retrieve_first_order_greeks(
+            self,
+            contract: OptionContract,
+            start_date: date,
+            end_date: date,
+        ) -> list[OptionGreek]:
+            if start_date == date(2026, 7, 10):
+                raise RuntimeError("No data found for greek chunk")
+            return super().retrieve_first_order_greeks(contract, start_date, end_date)
+
+        def retrieve_open_interest(
+            self,
+            contract: OptionContract,
+            start_date: date,
+            end_date: date,
+        ) -> list[OptionOpenInterest]:
+            if start_date == date(2026, 7, 10):
+                raise RuntimeError("No data found for open interest chunk")
+            return super().retrieve_open_interest(contract, start_date, end_date)
+
+    provider = PartialNoDataProvider()
+    pipeline = ThetaDataEODIngestionPipeline(provider, storage)
+
+    result = pipeline.ingest(
+        ThetaDataEODIngestionConfig(
+            symbol="SPY",
+            start_date=date(2026, 6, 10),
+            end_date=date(2026, 7, 15),
+            min_dte=30,
+            max_dte=45,
+        )
+    )
+
+    assert result.option_quotes == 1
+    assert result.option_greeks == 1
+    assert storage.option_quotes.retrieve_by_date(date(2026, 6, 10))[0].open_interest == 1_500
+
+
 def test_ingestion_config_validates_ranges() -> None:
     with pytest.raises(ValidationError, match="start_date must be less than or equal to end_date"):
         ThetaDataEODIngestionConfig(
