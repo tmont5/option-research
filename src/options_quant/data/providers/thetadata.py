@@ -179,7 +179,7 @@ class ThetaDataProvider:
         response = self._transport.get(
             "/v2/hist/stock/quote",
             {
-                "root": symbol,
+                "root": _thetadata_root(symbol),
                 "start_date": _thetadata_date(start_date),
                 "end_date": _thetadata_date(end_date),
             },
@@ -206,7 +206,7 @@ class ThetaDataProvider:
         response = self._transport.get(
             "/v2/hist/stock/eod",
             {
-                "root": symbol,
+                "root": _thetadata_root(symbol),
                 "start_date": _thetadata_date(start_date),
                 "end_date": _thetadata_date(end_date),
             },
@@ -228,7 +228,7 @@ class ThetaDataProvider:
         response = self._transport.get(
             "/v2/list/contracts",
             {
-                "root": symbol,
+                "root": _thetadata_root(symbol),
                 "date": _thetadata_date(as_of_date),
             },
         )
@@ -286,6 +286,8 @@ class ThetaDataProvider:
                 raise ValueError(
                     "ThetaData option EOD row must include bid/ask or a mark/close price"
                 )
+            if bid > ask:
+                continue
             quotes.append(
                 OptionQuote(
                     contract=contract,
@@ -381,7 +383,7 @@ def _contract_params(
     end_date: date,
 ) -> dict[str, str]:
     return {
-        "root": contract.underlying_symbol,
+        "root": _thetadata_root(contract.underlying_symbol),
         "exp": _thetadata_date(contract.expiration),
         "strike": _strike_text(contract.strike),
         "right": _thetadata_right(contract.option_type),
@@ -392,7 +394,7 @@ def _contract_params(
 
 def _contract_from_row(symbol: str, row: RawRow) -> OptionContract:
     return OptionContract(
-        underlying_symbol=str(row.get("underlying_symbol", row.get("root", symbol))),
+        underlying_symbol=symbol,
         expiration=_row_date(row, "expiration", "exp", "expiration_date"),
         strike=_required_decimal(row, "strike"),
         option_type=_option_type(row),
@@ -427,7 +429,10 @@ def _contract_rows(response: RawResponse, contract: OptionContract) -> list[RawR
 
 def _row_matches_contract(row: RawRow, contract: OptionContract) -> bool:
     symbol = _first_present(row, "underlying_symbol", "root", "symbol")
-    if symbol is not None and str(symbol) != contract.underlying_symbol:
+    if symbol is not None and str(symbol) not in {
+        contract.underlying_symbol,
+        _thetadata_root(contract.underlying_symbol),
+    }:
         return False
     expiration = _optional_date(row, "expiration", "exp", "expiration_date")
     if expiration is not None and expiration != contract.expiration:
@@ -564,6 +569,12 @@ def _aware(value: datetime) -> datetime:
 
 def _thetadata_date(value: date) -> str:
     return value.strftime("%Y%m%d")
+
+
+def _thetadata_root(symbol: str) -> str:
+    return {
+        "BRK-B": "BRK.B",
+    }.get(symbol, symbol)
 
 
 def _thetadata_right(option_type: OptionType) -> str:

@@ -279,6 +279,32 @@ def make_contract() -> OptionContract:
     )
 
 
+def test_retrieve_underlying_eod_prices_uses_thetadata_root_alias() -> None:
+    transport = MockThetaDataTransport(
+        {
+            "/v2/hist/stock/eod": {
+                "header": ["date", "close", "volume"],
+                "response": [[20260610, "485.15", 1_000_000]],
+            }
+        }
+    )
+    provider = ThetaDataProvider(transport)
+
+    prices = provider.retrieve_underlying_eod_prices(
+        "BRK-B",
+        date(2026, 6, 10),
+        date(2026, 6, 10),
+    )
+
+    assert transport.calls == [
+        (
+            "/v2/hist/stock/eod",
+            {"root": "BRK.B", "start_date": "20260610", "end_date": "20260610"},
+        )
+    ]
+    assert prices[0].symbol == "BRK-B"
+
+
 def test_retrieve_underlying_prices_maps_thetadata_rows_to_model() -> None:
     transport = MockThetaDataTransport(
         {
@@ -339,6 +365,30 @@ def test_retrieve_option_chain_maps_contract_rows() -> None:
     assert chain.contracts[0].strike == Decimal("200")
     assert chain.contracts[0].option_type is OptionType.PUT
     assert chain.contracts[1].option_type is OptionType.CALL
+
+
+def test_retrieve_option_chain_normalizes_thetadata_root_alias() -> None:
+    transport = MockThetaDataTransport(
+        {
+            "/v2/list/contracts": {
+                "response": [
+                    {
+                        "root": "BRK.B",
+                        "expiration": "2026-07-17",
+                        "strike": "480",
+                        "right": "P",
+                    },
+                ]
+            }
+        }
+    )
+    provider = ThetaDataProvider(transport)
+
+    chain = provider.retrieve_option_chain("BRK-B", date(2026, 6, 10))
+
+    assert transport.calls == [("/v2/list/contracts", {"root": "BRK.B", "date": "20260610"})]
+    assert chain.underlying_symbol == "BRK-B"
+    assert chain.contracts[0].underlying_symbol == "BRK-B"
 
 
 def test_retrieve_implied_volatility_maps_iv_rows() -> None:
@@ -522,6 +572,91 @@ def test_retrieve_option_eod_quotes_maps_eod_rows() -> None:
     assert quotes[0].last == Decimal("3.20")
     assert quotes[0].mark == Decimal("3.20")
     assert quotes[0].open_interest == 1_500
+
+
+def test_retrieve_option_eod_quotes_skips_inverted_bid_ask_rows() -> None:
+    contract = make_contract()
+    transport = MockThetaDataTransport(
+        {
+            "/v2/hist/option/eod": {
+                "response": [
+                    {
+                        "date": "2026-06-10",
+                        "bid": "3.40",
+                        "ask": "3.20",
+                        "close": "3.30",
+                    },
+                    {
+                        "date": "2026-06-11",
+                        "bid": "3.10",
+                        "ask": "3.30",
+                        "close": "3.20",
+                    },
+                ]
+            }
+        }
+    )
+    provider = ThetaDataProvider(transport)
+
+    quotes = provider.retrieve_option_eod_quotes(
+        contract,
+        date(2026, 6, 10),
+        date(2026, 6, 11),
+    )
+
+    assert len(quotes) == 1
+    assert quotes[0].timestamp == datetime(2026, 6, 11, tzinfo=UTC)
+    assert quotes[0].bid == Decimal("3.10")
+    assert quotes[0].ask == Decimal("3.30")
+
+
+def test_retrieve_option_eod_quotes_uses_thetadata_root_alias() -> None:
+    contract = OptionContract(
+        underlying_symbol="BRK-B",
+        expiration=date(2026, 7, 17),
+        strike=Decimal("480"),
+        option_type=OptionType.PUT,
+    )
+    transport = MockThetaDataTransport(
+        {
+            "/v2/hist/option/eod": {
+                "response": [
+                    {
+                        "symbol": "BRK.B",
+                        "expiration": "2026-07-17",
+                        "strike": "480",
+                        "right": "P",
+                        "date": "2026-06-10",
+                        "bid": "6.10",
+                        "ask": "6.30",
+                        "close": "6.20",
+                    }
+                ]
+            }
+        }
+    )
+    provider = ThetaDataProvider(transport)
+
+    quotes = provider.retrieve_option_eod_quotes(
+        contract,
+        date(2026, 6, 10),
+        date(2026, 6, 10),
+    )
+
+    assert transport.calls == [
+        (
+            "/v2/hist/option/eod",
+            {
+                "root": "BRK.B",
+                "exp": "20260717",
+                "strike": "480",
+                "right": "P",
+                "start_date": "20260610",
+                "end_date": "20260610",
+            },
+        )
+    ]
+    assert quotes[0].contract == contract
 
 
 def test_retrieve_option_eod_quotes_filters_rows_to_requested_contract() -> None:
