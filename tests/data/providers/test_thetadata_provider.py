@@ -373,7 +373,7 @@ def test_retrieve_option_chain_normalizes_thetadata_root_alias() -> None:
             "/v2/list/contracts": {
                 "response": [
                     {
-                        "root": "BRK.B",
+                        "root": "BRKB",
                         "expiration": "2026-07-17",
                         "strike": "480",
                         "right": "P",
@@ -386,7 +386,7 @@ def test_retrieve_option_chain_normalizes_thetadata_root_alias() -> None:
 
     chain = provider.retrieve_option_chain("BRK-B", date(2026, 6, 10))
 
-    assert transport.calls == [("/v2/list/contracts", {"root": "BRK.B", "date": "20260610"})]
+    assert transport.calls == [("/v2/list/contracts", {"root": "BRKB", "date": "20260610"})]
     assert chain.underlying_symbol == "BRK-B"
     assert chain.contracts[0].underlying_symbol == "BRK-B"
 
@@ -622,7 +622,7 @@ def test_retrieve_option_eod_quotes_uses_thetadata_root_alias() -> None:
             "/v2/hist/option/eod": {
                 "response": [
                     {
-                        "symbol": "BRK.B",
+                        "symbol": "BRKB",
                         "expiration": "2026-07-17",
                         "strike": "480",
                         "right": "P",
@@ -647,7 +647,7 @@ def test_retrieve_option_eod_quotes_uses_thetadata_root_alias() -> None:
         (
             "/v2/hist/option/eod",
             {
-                "root": "BRK.B",
+                "root": "BRKB",
                 "exp": "20260717",
                 "strike": "480",
                 "right": "P",
