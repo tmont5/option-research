@@ -179,7 +179,7 @@ class ThetaDataProvider:
         response = self._transport.get(
             "/v2/hist/stock/quote",
             {
-                "root": _thetadata_root(symbol),
+                "root": _thetadata_stock_root(symbol),
                 "start_date": _thetadata_date(start_date),
                 "end_date": _thetadata_date(end_date),
             },
@@ -206,7 +206,7 @@ class ThetaDataProvider:
         response = self._transport.get(
             "/v2/hist/stock/eod",
             {
-                "root": _thetadata_root(symbol),
+                "root": _thetadata_stock_root(symbol),
                 "start_date": _thetadata_date(start_date),
                 "end_date": _thetadata_date(end_date),
             },
@@ -228,7 +228,7 @@ class ThetaDataProvider:
         response = self._transport.get(
             "/v2/list/contracts",
             {
-                "root": _thetadata_root(symbol),
+                "root": _thetadata_option_root(symbol),
                 "date": _thetadata_date(as_of_date),
             },
         )
@@ -383,7 +383,7 @@ def _contract_params(
     end_date: date,
 ) -> dict[str, str]:
     return {
-        "root": _thetadata_root(contract.underlying_symbol),
+        "root": _thetadata_option_root(contract.underlying_symbol),
         "exp": _thetadata_date(contract.expiration),
         "strike": _strike_text(contract.strike),
         "right": _thetadata_right(contract.option_type),
@@ -431,7 +431,7 @@ def _row_matches_contract(row: RawRow, contract: OptionContract) -> bool:
     symbol = _first_present(row, "underlying_symbol", "root", "symbol")
     if symbol is not None and str(symbol) not in {
         contract.underlying_symbol,
-        _thetadata_root(contract.underlying_symbol),
+        _thetadata_option_root(contract.underlying_symbol),
     }:
         return False
     expiration = _optional_date(row, "expiration", "exp", "expiration_date")
@@ -571,9 +571,15 @@ def _thetadata_date(value: date) -> str:
     return value.strftime("%Y%m%d")
 
 
-def _thetadata_root(symbol: str) -> str:
+def _thetadata_stock_root(symbol: str) -> str:
     return {
         "BRK-B": "BRK.B",
+    }.get(symbol, symbol)
+
+
+def _thetadata_option_root(symbol: str) -> str:
+    return {
+        "BRK-B": "BRKB",
     }.get(symbol, symbol)
 
 
