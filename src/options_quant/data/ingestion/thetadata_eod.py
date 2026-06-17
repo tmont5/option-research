@@ -270,11 +270,14 @@ def _closest_delta_contracts(
     effective_chain_date = chain_date or config.effective_chain_as_of_date
     candidates: list[tuple[Decimal, Decimal, OptionContract]] = []
     for contract in contracts:
-        greeks = provider.retrieve_first_order_greeks(
-            contract,
-            effective_chain_date,
-            effective_chain_date,
-        )
+        try:
+            greeks = provider.retrieve_first_order_greeks(
+                contract,
+                effective_chain_date,
+                effective_chain_date,
+            )
+        except Exception:
+            continue
         deltas = [greek.delta for greek in greeks if greek.delta is not None]
         if not deltas:
             continue
