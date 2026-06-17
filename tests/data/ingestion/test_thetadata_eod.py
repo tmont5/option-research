@@ -320,6 +320,61 @@ def test_pipeline_treats_no_data_history_chunks_as_empty(storage: DuckDBStorage)
     assert storage.option_quotes.retrieve_by_date(date(2026, 6, 10))[0].open_interest == 1_500
 
 
+def test_pipeline_skips_contracts_with_unavailable_selection_greeks(
+    storage: DuckDBStorage,
+) -> None:
+    class BadSelectionGreekProvider(MockEODProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.bad_contract = OptionContract(
+                underlying_symbol="SPY",
+                expiration=EXPIRATION,
+                strike=Decimal("515"),
+                option_type=OptionType.PUT,
+            )
+
+        def retrieve_option_chain(self, symbol: str, as_of_date: date) -> OptionChain:
+            self.calls.append(("chain", (symbol, as_of_date)))
+            return OptionChain(
+                underlying_symbol=symbol,
+                timestamp=datetime.combine(as_of_date, datetime.min.time(), tzinfo=UTC),
+                contracts=(self.bad_contract, self.selected_contract),
+            )
+
+        def retrieve_first_order_greeks(
+            self,
+            contract: OptionContract,
+            start_date: date,
+            end_date: date,
+        ) -> list[OptionGreek]:
+            if contract == self.bad_contract:
+                raise RuntimeError("Rounding necessary")
+            return super().retrieve_first_order_greeks(contract, start_date, end_date)
+
+    provider = BadSelectionGreekProvider()
+    pipeline = ThetaDataEODIngestionPipeline(provider, storage)
+
+    result = pipeline.ingest(
+        ThetaDataEODIngestionConfig(
+            symbol="SPY",
+            start_date=date(2026, 6, 10),
+            end_date=date(2026, 6, 10),
+            min_dte=30,
+            max_dte=45,
+            target_delta=Decimal("-0.25"),
+            contracts_around_target=2,
+        )
+    )
+
+    assert result.contracts_selected == 1
+    assert storage.option_chains.retrieve_by_date(date(2026, 6, 10))[0].contracts == (
+        provider.selected_contract,
+    )
+    assert not any(
+        call == "quotes" and args[0] == provider.bad_contract for call, args in provider.calls
+    )
+
+
 def test_ingestion_config_validates_ranges() -> None:
     with pytest.raises(ValidationError, match="start_date must be less than or equal to end_date"):
         ThetaDataEODIngestionConfig(
