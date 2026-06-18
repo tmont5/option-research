@@ -488,10 +488,10 @@ def _quote_for(
         WHERE observed_date = ?
           AND underlying_symbol = ?
           AND expiration = ?
-          AND strike = ?
+          AND CAST(strike AS DOUBLE) = ?
           AND option_type = 'put'
         """,
-        [observed_date, candidate.symbol, candidate.expiration, candidate.strike],
+        [observed_date, candidate.symbol, candidate.expiration, float(candidate.strike)],
     ).fetchone()
     if row is None or row[0] is None:
         return None, None
