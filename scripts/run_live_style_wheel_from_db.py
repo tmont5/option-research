@@ -29,13 +29,19 @@ def main() -> None:
     parser.add_argument("--database-path", type=Path, required=True)
     parser.add_argument("--start-date", type=date.fromisoformat, required=True)
     parser.add_argument("--end-date", type=date.fromisoformat, required=True)
-    parser.add_argument("--tier", choices=[tier.value for tier in StockQualityTier], default="A")
+    parser.add_argument(
+        "--tier",
+        choices=[tier.value for tier in StockQualityTier],
+        action="append",
+        help="Scanner tier to include. Repeat to scan multiple tiers together. Defaults to A.",
+    )
     parser.add_argument("--initial-cash", type=Decimal, default=Decimal("500000"))
     parser.add_argument("--commission-per-contract", type=Decimal, default=Decimal("0.65"))
     parser.add_argument("--target-capital-utilization", type=Decimal, default=Decimal("0.75"))
     parser.add_argument("--max-capital-utilization", type=Decimal, default=Decimal("1.00"))
     parser.add_argument("--max-total-positions", type=int, default=10)
     parser.add_argument("--max-contracts-per-ticker", type=int, default=3)
+    parser.add_argument("--max-candidates-per-day", type=int, default=50)
     parser.add_argument("--put-max-delta", type=Decimal, default=Decimal("0.25"))
     parser.add_argument("--put-min-monthly-yield", type=Decimal, default=Decimal("0.025"))
     parser.add_argument("--call-min-monthly-yield", type=Decimal, default=Decimal("0.02"))
@@ -53,12 +59,13 @@ def main() -> None:
     args = parser.parse_args()
 
     config = ScannerStylePutStrategyConfig()
-    tier = StockQualityTier(args.tier)
-    symbols = config.symbols_for_tier(tier)
+    tiers = _selected_tiers(args)
+    symbols = _symbols_for_tiers(config, tiers)
     con = duckdb.connect(str(args.database_path), read_only=True)
     try:
         result = run_live_style(
             con=con,
+            tiers=tiers,
             symbols=symbols,
             start_date=args.start_date,
             end_date=args.end_date,
@@ -68,6 +75,7 @@ def main() -> None:
             max_capital_utilization=args.max_capital_utilization,
             max_total_positions=args.max_total_positions,
             max_contracts_per_ticker=args.max_contracts_per_ticker,
+            max_candidates_per_day=args.max_candidates_per_day,
             put_max_delta=args.put_max_delta,
             put_min_monthly_yield=args.put_min_monthly_yield,
             call_min_monthly_yield=args.call_min_monthly_yield,
@@ -90,7 +98,8 @@ def main() -> None:
     args.report_path.write_text(
         _report(
             database_path=args.database_path,
-            tier=tier,
+            tiers=tiers,
+            symbols=symbols,
             challenged_policy=args.challenged_policy,
             result=result,
         ),
@@ -115,6 +124,7 @@ def main() -> None:
 def run_live_style(
     *,
     con: duckdb.DuckDBPyConnection,
+    tiers: tuple[StockQualityTier, ...],
     symbols: tuple[str, ...],
     start_date: date,
     end_date: date,
@@ -124,6 +134,7 @@ def run_live_style(
     max_capital_utilization: Decimal,
     max_total_positions: int,
     max_contracts_per_ticker: int,
+    max_candidates_per_day: int,
     put_max_delta: Decimal,
     put_min_monthly_yield: Decimal,
     call_min_monthly_yield: Decimal,
@@ -212,6 +223,7 @@ def run_live_style(
             max_capital_utilization=max_capital_utilization,
             max_total_positions=max_total_positions,
             max_contracts_per_ticker=max_contracts_per_ticker,
+            max_candidates_per_day=max_candidates_per_day,
             min_dte=min_dte,
             max_dte=max_dte,
             put_max_delta=put_max_delta,
@@ -266,6 +278,10 @@ def run_live_style(
     total_pnl = final_equity - initial_cash
     summary = {
         "initial_cash": float(initial_cash),
+        "tiers": [tier.value for tier in tiers],
+        "symbols": list(symbols),
+        "symbol_count": len(symbols),
+        "max_candidates_per_day": max_candidates_per_day,
         "cash": float(cash),
         "final_share_value": float(final_share_value),
         "final_equity": float(final_equity),
@@ -584,6 +600,7 @@ def _open_live_puts(
     max_capital_utilization: Decimal,
     max_total_positions: int,
     max_contracts_per_ticker: int,
+    max_candidates_per_day: int,
     min_dte: int,
     max_dte: int,
     put_max_delta: Decimal,
@@ -603,7 +620,7 @@ def _open_live_puts(
         min_bid=min_bid,
         min_open_interest=min_open_interest,
         max_spread_pct=max_spread_pct,
-        max_candidates=20,
+        max_candidates=max_candidates_per_day,
     )
     for candidate in candidates:
         if _position_count(open_puts, open_calls, share_lots) >= max_total_positions:
@@ -864,21 +881,40 @@ def _average(values: list[Decimal]) -> Decimal:
     return sum(values, ZERO) / Decimal(len(values))
 
 
+def _selected_tiers(args: argparse.Namespace) -> tuple[StockQualityTier, ...]:
+    values = args.tier or [StockQualityTier.A.value]
+    tiers = tuple(StockQualityTier(value) for value in values)
+    return tuple(dict.fromkeys(tiers))
+
+
+def _symbols_for_tiers(
+    config: ScannerStylePutStrategyConfig,
+    tiers: tuple[StockQualityTier, ...],
+) -> tuple[str, ...]:
+    symbols = [symbol for tier in tiers for symbol in config.symbols_for_tier(tier)]
+    return tuple(dict.fromkeys(symbols))
+
+
 def _report(
     *,
     database_path: Path,
-    tier: StockQualityTier,
+    tiers: tuple[StockQualityTier, ...],
+    symbols: tuple[str, ...],
     challenged_policy: str,
     result: dict[str, Any],
 ) -> str:
     summary = result["summary"]
+    tier_label = "+".join(tier.value for tier in tiers)
     lines = [
-        f"# Live-Style Wheel Simulation - Tier {tier.value}",
+        f"# Live-Style Wheel Simulation - Tier {tier_label}",
         "",
         f"- Database: {database_path}",
+        f"- Universe: {len(symbols)} symbols from tier(s) {tier_label}.",
+        f"- Symbols: {', '.join(symbols)}",
         f"- Challenged-put policy: {challenged_policy}",
         "- Entry cadence: any observed trading day with eligible candidates",
         "- Defaults: 30-35 DTE, put delta <= 0.25, put monthly yield >= 2.5%, max 3 contracts per ticker.",
+        f"- Candidate scan cap: top {summary['max_candidates_per_day']} candidates per day.",
         "",
         "## Results",
         "",

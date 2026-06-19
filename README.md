@@ -66,3 +66,8 @@ Install pre-commit hooks:
 poetry run pre-commit install
 ```
 
+## Research Baselines
+
+- [Live-style scanner wheel baseline](docs/live_style_baseline.md) defines the
+  canonical Tier A+B 2025 H1 reference run, reproduction commands, and current
+  utilization diagnostics for scanner-style wheel research.
