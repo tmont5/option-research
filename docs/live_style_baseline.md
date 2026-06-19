@@ -177,3 +177,41 @@ Phase 2 working conclusions:
   but drawdown and assignments rise quickly.
 - Tier B only is weak in this window: low activity, low utilization, and lower
   return.
+
+## Phase 3 Explainability
+
+The Phase 3 explainability runner focuses on why the top scenarios behaved
+differently:
+
+```bash
+uv run python scripts/run_live_style_explainability_from_db.py \
+  --database-path runs/scanner_backfill_tier_ab_2025h1/market_data.duckdb \
+  --start-date 2025-01-01 \
+  --end-date 2025-06-30 \
+  --report-path runs/live_style_explainability_tier_ab_2025h1/report.md \
+  --summary-path runs/live_style_explainability_tier_ab_2025h1/summary.json
+```
+
+It compares the baseline, Tier A only, wider DTE 25-40, and higher delta 0.28.
+The report breaks results down by filter funnel, tier contribution, symbol
+contribution, assignment count, and max-drawdown-window exposure.
+
+Current Phase 3 findings:
+
+- Tier A only beat the A+B baseline because quality improved more than breadth:
+  return rose from 4.09% to 4.89%, while max drawdown fell from 4.07% to 1.91%.
+- Tier B did not just underperform in isolation. In the A+B baseline, Tier B
+  consumed some slots/exposure and reduced Tier A throughput: baseline Tier A
+  contribution was 23 put contracts and about 13,042 PnL, while Tier A only
+  produced 38 put contracts and about 25,614 PnL.
+- The baseline filter funnel was tight: 85,417 raw joined put rows became 7,076
+  DTE-pass rows, 2,742 liquidity-pass rows, 1,696 delta-pass rows, 72 yield-pass
+  rows, and 55 final one-per-symbol candidates.
+- Wider DTE is the cleanest A+B relaxation because it improves candidate supply
+  before loosening riskier yield or delta constraints: eligible days rose from
+  28/121 to 45/121, return rose to 6.87%, and max drawdown stayed below 7%.
+- Higher delta 0.28 increased raw return to 8.40%, but drawdown rose to 9.40%
+  and assignments increased from 1 to 3, making it a riskier lever.
+- Yield is the biggest filter bottleneck after DTE/liquidity/delta. In the
+  baseline, 1,696 rows passed delta but only 72 passed the 2.5% monthly yield
+  floor.
